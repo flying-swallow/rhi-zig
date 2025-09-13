@@ -1,0 +1,22 @@
+.{
+    .name = .rhi,
+    .version = "0.0.0",
+    .fingerprint = 0x317e5d7f685d6ba3,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .vma = .{ .path = "deps/vma", .lazy = true },
+        .zwindows = .{
+            .url = "git+https://github.com/zig-gamedev/zwindows.git#e2c049ff9abd7a3d32e5aaa04223fc9eee2c593a",
+            .hash = "zwindows-0.2.0-dev-xMZ1u9hgDAAvgSPmVyhXSpSuq3chYsBsUXfb8E_W88Eo",
+        },
+        .vulkan_headers = .{
+            .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
+            .hash = "N-V-__8AAAkkoQGn5z1yoNVrwqZfnYmZp8AZ5CJgoHRMQI0c",
+        },
+        .vulkan = .{
+            .url = "git+https://github.com/flying-swallow/vulkan-zig.git#4b7b9a8b949f326d85d9eff5013f445fb95ffbab",
+            .hash = "vulkan-0.0.0-r7Ytx5BBAwCay_2JFZPIdfMhfu28r5znPs1-DXRmuMIk",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}
