@@ -49,9 +49,7 @@ pub fn build(b: *std.Build) !void {
     lib.step.dependOn(activate_zwindows);
     
     // Install vendored binaries
-    @import("zwindows").install_xaudio2(&lib.step, zwindows, .bin);
     @import("zwindows").install_d3d12(&lib.step, zwindows, .bin);
-    @import("zwindows").install_directml(&lib.step, zwindows, .bin);
 
     b.installArtifact(lib);
     const mod_tests = b.addTest(.{

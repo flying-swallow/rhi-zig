@@ -5,7 +5,7 @@ const ticks_per_tock = 720; // Least common multiple of 'snap_frame_rates'
 const snap_tolerance_us = 200;
 const us_per_s = 1_000_000;
 
-const TimeStep = @This();
+pub const TimeStep = @This();
 tocks_per_s: u64,
 accumulated_ticks: u64 = 0,
 previous_timestamp: ?u64 = null,
@@ -38,4 +38,7 @@ pub fn produce(step: *TimeStep, current_timestamp: u64) void {
     }
     step.previous_timestamp = current_timestamp;
 }
+
+
+
 
