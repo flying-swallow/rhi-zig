@@ -14,13 +14,15 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const rhi_dep = b.dependency("rhi", .{});
     const rhi = rhi_dep.module("rhi");
+    const core_dep = b.dependency("core", .{});
 
     const root_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "rhi", .module = rhi}
+            .{ .name = "rhi", .module = rhi},
+            .{ .name = "core", .module = core_dep.module("core")}
         },
     });
 
@@ -29,20 +31,8 @@ pub fn build(b: *std.Build) !void {
         .root_module = root_module
     });
     
-    const sdl_dep = b.dependency("sdl", .{
-        .target = target,
-        .optimize = optimize,
-        //.preferred_linkage = .static,
-        //.strip = null,
-        //.sanitize_c = null,
-        //.pic = null,
-        //.lto = null,
-        //.emscripten_pthreads = false,
-        //.install_build_config_h = false,
-    });
-    exe.linkLibrary(sdl_dep.artifact("SDL3"));
-    exe.step.dependOn(&(try glslang_step(b, "opaque.frag", b.path("assets/opaque.frag"))).step);
-    exe.step.dependOn(&(try glslang_step(b, "opaque.vert", b.path("assets/opaque.vert"))).step);                 
+    //exe.step.dependOn(&(try glslang_step(b, "opaque.frag", b.path("assets/opaque.frag"))).step);
+    //exe.step.dependOn(&(try glslang_step(b, "opaque.vert", b.path("assets/opaque.vert"))).step);                 
 
     b.installArtifact(exe);
 
