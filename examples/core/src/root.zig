@@ -15,7 +15,6 @@ pub fn InitResult(comptime Context: anytype) type {
 }
 
 pub fn SdlApplicaton(comptime Context: anytype, handlers: struct {
-            quit_handler: fn (cntx: *Context) void,
             iterate_handler: fn (cntx: *Context) anyerror!sdl.SDL_AppResult,
             app_init: fn (argv: [][*:0]u8) anyerror!InitResult(Context),
             app_event: fn (cntx: *Context, event: *sdl.SDL_Event) anyerror!sdl.SDL_AppResult,

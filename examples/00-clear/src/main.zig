@@ -5,7 +5,16 @@ const core = @import("core");
 
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = 4, .sync_primative = true });
 var allocator: std.mem.Allocator = undefined;
-pub const AppContext = struct { window: *core.sdl.SDL_Window = undefined, allocator: std.mem.Allocator = undefined, renderer: rhi.Renderer = undefined, swapchain: rhi.Swapchain = undefined, device: rhi.Device = undefined, timekeeper: rhi.TimeKeeper = undefined, dirty_resize: bool = false, graphics_cmd_ring: CmdRingBuffer = undefined };
+pub const AppContext = struct { 
+    window: *core.sdl.SDL_Window = undefined, 
+    allocator: std.mem.Allocator = undefined, 
+    renderer: rhi.Renderer = undefined, 
+    swapchain: rhi.Swapchain = undefined, 
+    device: rhi.Device = undefined, 
+    timekeeper: rhi.TimeKeeper = undefined, 
+    dirty_resize: bool = false, 
+    graphics_cmd_ring: CmdRingBuffer = undefined 
+};
 
 //var window: *core.sdl.SDL_Window = undefined;
 //var renderer: rhi.Renderer = undefined;
@@ -430,10 +439,10 @@ pub const AppContext = struct { window: *core.sdl.SDL_Window = undefined, alloca
 //    return core.sdl.SDL_EnterAppMainCallbacks(argc, @ptrCast(argv), sdlAppInitC, sdlAppIterateC, sdlAppEventC, sdlAppQuitC);
 //}
 
-fn quit_handler(cntx: *AppContext) void {
-    _ = cntx;
-    std.debug.print("Quit handler called\n", .{});
-}
+//fn quit_handler(cntx: *AppContext) void {
+//    _ = cntx;
+//    std.debug.print("Quit handler called\n", .{});
+//}
 fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
     while (cntx.timekeeper.consume()) {}
 
@@ -639,21 +648,7 @@ fn app_init(argv: [][*:0]u8) anyerror!core.InitResult(AppContext) {
     var adapters = try rhi.PhysicalAdapter.enumerate_adapters(allocator, &renderer);
     defer adapters.deinit(allocator);
 
-    var selected_adapter_index: usize = 0;
-    for (adapters.items, 0..) |adp, idx| {
-        if (@intFromEnum(adp.adapter_type) > @intFromEnum(adapters.items[selected_adapter_index].adapter_type))
-            selected_adapter_index = idx;
-        if (@intFromEnum(adp.adapter_type) < @intFromEnum(adapters.items[selected_adapter_index].adapter_type))
-            continue;
-
-        if (@intFromEnum(adp.preset_level) > @intFromEnum(adapters.items[selected_adapter_index].preset_level))
-            selected_adapter_index = idx;
-        if (@intFromEnum(adp.preset_level) < @intFromEnum(adapters.items[selected_adapter_index].preset_level))
-            continue;
-
-        if (adp.video_memory_size > adapters.items[selected_adapter_index].video_memory_size)
-            selected_adapter_index = idx;
-    }
+    const selected_adapter_index = rhi.PhysicalAdapter.default_select_adapter(adapters.items[0..]);
     var device = try rhi.Device.init(allocator, &renderer, &adapters.items[selected_adapter_index]);
     const swapchain = try rhi.Swapchain.init(allocator, &renderer, &device, 640, 480, &device.graphics_queue, window_handle, .{});
 
@@ -683,7 +678,7 @@ fn app_quit(cntx: *AppContext, result: core.sdl.SDL_AppResult) void {
     cntx.swapchain.deinit(&cntx.renderer, &cntx.device);
     cntx.device.deinit(&cntx.renderer);
     cntx.renderer.deinit();
-    
+
     cntx.allocator.destroy(cntx);
     std.debug.print("App quit called with result: {any}\n", .{result});
 }
@@ -709,7 +704,6 @@ pub fn main() !void {
     allocator = gpa.allocator();
 
     _ = core.SdlApplicaton(AppContext, .{
-        .quit_handler = quit_handler,
         .iterate_handler = iterate_handler,
         .app_init = app_init,
         .app_event = app_event,

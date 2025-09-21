@@ -198,6 +198,25 @@ is_shader_atomics_i64_supported: bool = false,
 // Emulated features
 is_draw_parameters_emulation_enabled: bool = false,
 
+pub fn default_select_adapter(adapters: []const PhysicalAdapter) usize {
+    var selected_adapter_index: usize = 0;
+    for (adapters, 0..) |adp, idx| {
+        if (@intFromEnum(adp.adapter_type) > @intFromEnum(adapters[selected_adapter_index].adapter_type))
+            selected_adapter_index = idx;
+        if (@intFromEnum(adp.adapter_type) < @intFromEnum(adapters[selected_adapter_index].adapter_type))
+            continue;
+
+        if (@intFromEnum(adp.preset_level) > @intFromEnum(adapters[selected_adapter_index].preset_level))
+            selected_adapter_index = idx;
+        if (@intFromEnum(adp.preset_level) < @intFromEnum(adapters[selected_adapter_index].preset_level))
+            continue;
+
+        if (adp.video_memory_size > adapters[selected_adapter_index].video_memory_size)
+            selected_adapter_index = idx;
+    }
+    return selected_adapter_index;
+}
+
 pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer) !std.ArrayList(PhysicalAdapter) {
     var result = std.ArrayList(PhysicalAdapter).empty;
     errdefer result.deinit(allocator);
