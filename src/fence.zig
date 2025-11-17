@@ -51,7 +51,7 @@ pub fn wait_for_fences(comptime reserve: usize, device: *rhi.Device, renderer: *
     }
 }
 
-pub fn wait_for_fences_alloc(allocator: std.mem.Allocator,device: *rhi.Device, renderer: *rhi.Renderer, fences: []const *Fence) void {
+pub fn wait_for_fences_alloc(allocator: std.mem.Allocator, device: *rhi.Device, renderer: *rhi.Renderer, fences: []const *Fence) void {
     if (rhi.is_target_selected(.vk, renderer)) {
         var vk_fences = try allocator.alloc(rhi.vulkan.vk.Fence, fences.len);
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;

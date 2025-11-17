@@ -18,7 +18,7 @@ pub const Buffer = @This();
 mapped_region: ?[]u8 = null,
 backend: union {
     vk: rhi.wrapper_platform_type(.vk, struct {
-        buffer: rhi.vulkan.vk.Buffer = null,
+        buffer: rhi.vulkan.vk.Buffer = std.mem.zeroes(rhi.vulkan.vk.Buffer),
         allocation: vma.c.VmaAllocation = null,
     }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),

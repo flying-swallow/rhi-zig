@@ -20,6 +20,7 @@ pub const fence = @import("fence.zig");
 pub const pipeline_layout = @import("pipeline_layout.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const resource_loader = @import("resource_loader.zig");
+pub const shader = @import("shader.zig");
 
 pub const Renderer = renderer.Renderer;
 pub const PhysicalAdapter = physical_adapter.PhysicalAdapter;
@@ -38,6 +39,7 @@ pub const Fence = fence.Fence;
 pub const ResourceLoader = resource_loader.ResourceLoader;
 pub const PipelineLayout = pipeline_layout.PipelineLayout;
 pub const GraphicsPipeline = pipeline.GraphicsPipeline;
+pub const Shader = shader.Shader;
 pub const TimeKeeper = @import("time_keeper.zig");
 
 pub const Selection = enum {

@@ -19,21 +19,20 @@ backend: union(rhi.Backend) {
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },
 
-//pub fn descriptor(self: *Sampler) rhi.Descriptor {
-//    switch (self.backend) {
-//        .vk => |vk| {
-//            return .{ .backend = .{ .vk = .{ 
-//                .type =  volk.c.VK_DESCRIPTOR_TYPE_SAMPLER, .view = .{ .image = volk.c.VkDescriptorImageInfo{
-//                .sampler = vk.sampler,
-//                .imageView = null,
-//                .imageLayout = volk.c.VK_IMAGE_LAYOUT_UNDEFINED,
-//            } } } } };
-//        },
-//        .dx12 => {},
-//        .mtl => {},
-//    }
-//    return .{};
-//}
+pub fn descriptor(self: *Sampler) rhi.Descriptor {
+    switch (self.backend) {
+        .vk => |vk| {
+            return .{ .backend = .{ .vk = .{ .type = rhi.c.VK_DESCRIPTOR_TYPE_SAMPLER, .view = .{ .image = rhi.c.VkDescriptorImageInfo{
+                .sampler = vk.sampler,
+                .imageView = null,
+                .imageLayout = rhi.c.VK_IMAGE_LAYOUT_UNDEFINED,
+            } } } } };
+        },
+        .dx12 => {},
+        .mtl => {},
+    }
+    return .{};
+}
 
 pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, desc: struct {
     min_filter: FilterType,
@@ -51,31 +50,42 @@ pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, desc: struct {
 }) Sampler {
     if (rhi.is_target_selected(.vk, renderer)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
-        var sampler_create_info = rhi.vulkan.vk.SamplerCreateInfo{ .flags = 0, .mag_filter = switch (desc.mag_filter) {
-            .nearest => .nearest,
-            .linear => .linear,
-        }, .min_filter = switch (desc.min_filter) {
-            .nearest => .nearest,
-            .linear => .linear,
-        }, .mipmap_mode = switch (desc.mip_map_mode) {
-            .nearest => .nearest,
-            .linear => .linear,
-        }, .address_mode_u = switch (desc.address_u) {
-            .mirror => .mirror, //volk.c.VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
-            .repeat => .repeat, //volk.c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .clamp_to_edge => .clamp_to_edge, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .clamp_to_border => .clamp_to_border, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-        }, .address_mode_v  = switch (desc.address_v) {
-            .mirror => .mirror, //volk.c.VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
-            .repeat => .repeat, //volk.c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .clamp_to_edge => .clamp_to_edge, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .clamp_to_border => .clamp_to_border, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-        }, .address_mode_w = switch (desc.address_w) {
-            .mirror => .mirror, //volk.c.VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
-            .repeat => .repeat, //volk.c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
-            .clamp_to_edge => .clamp_to_edge, // volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-            .clamp_to_border => .clamp_to_border, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
-        }, .mipLodBias = desc.mip_lod_bias, .anisotropyEnable = if (desc.max_anisotropy > 1.0) .true else .false, .maxAnisotropy = if (desc.max_anisotropy > 1.0) desc.max_anisotropy else 1.0 };
+        var sampler_create_info = rhi.vulkan.vk.SamplerCreateInfo{
+            .flags = 0,
+            .mag_filter = switch (desc.mag_filter) {
+                .nearest => .nearest,
+                .linear => .linear,
+            },
+            .min_filter = switch (desc.min_filter) {
+                .nearest => .nearest,
+                .linear => .linear,
+            },
+            .mipmap_mode = switch (desc.mip_map_mode) {
+                .nearest => .nearest,
+                .linear => .linear,
+            },
+            .address_mode_u = switch (desc.address_u) {
+                .mirror => .mirror, //volk.c.VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
+                .repeat => .repeat, //volk.c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .clamp_to_edge => .clamp_to_edge, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                .clamp_to_border => .clamp_to_border, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+            },
+            .address_mode_v = switch (desc.address_v) {
+                .mirror => .mirror, //volk.c.VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
+                .repeat => .repeat, //volk.c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .clamp_to_edge => .clamp_to_edge, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                .clamp_to_border => .clamp_to_border, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+            },
+            .address_mode_w = switch (desc.address_w) {
+                .mirror => .mirror, //volk.c.VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
+                .repeat => .repeat, //volk.c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+                .clamp_to_edge => .clamp_to_edge, // volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+                .clamp_to_border => .clamp_to_border, //volk.c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+            },
+            .mipLodBias = desc.mip_lod_bias,
+            .anisotropyEnable = if (desc.max_anisotropy > 1.0) .true else .false,
+            .maxAnisotropy = if (desc.max_anisotropy > 1.0) desc.max_anisotropy else 1.0,
+        };
         const sampler = try dkb.createSampler(device.backend.vk.device, &sampler_create_info, null);
         return .{ .backend = .{ .vk = .{ .sampler = sampler } } };
     } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
