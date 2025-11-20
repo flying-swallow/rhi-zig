@@ -4,7 +4,6 @@ const std = @import("std");
 const vulkan = @import("vulkan.zig");
 
 pub const PipelineLayout = @This();
-
 pub const DescriptorType = enum(u8) {
     sampler,
     combined_image_sampler,
@@ -21,10 +20,17 @@ pub const DescriptorType = enum(u8) {
     acceleration_structure, // VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR
 };
 
-pub const DescriptorRangeBits = enum(u8) { none = 0, paritially_bound = 1 << 0, array = 1 << 1, variable_sized_array = 1 << 2 };
+pub const DescriptorRangeBits = enum(u8) { 
+    none = 0, 
+    paritially_bound = 1 << 0, 
+    array = 1 << 1, 
+    variable_sized_array = 1 << 2 
+};
 
 backend: union {
-    vk: rhi.wrapper_platform_type(.vk, struct { layout: rhi.vulkan.vk.PipelineLayout }),
+    vk: rhi.wrapper_platform_type(.vk, struct { 
+        layout: rhi.vulkan.vk.PipelineLayout 
+    }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },

@@ -93,30 +93,6 @@ fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
                 };
                 dkb.cmdBeginRendering(ring_element.cmds[0].backend.vk.cmd, &rending_info);
             }
-
-            //const clear_ops = [_]struct {
-            //    clear_color: [4]f32,
-            //    clear_rect: rhi.vulkan.vk.Rect2D,
-            //}{
-            //    .{ .clear_color = [4]f32{ 0.0, 0.0, 0.0, 1.0 }, .clear_rect = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = cntx.swapchain.width / 2, .height = cntx.swapchain.height / 2 } } },
-            //    .{ .clear_color = [4]f32{ 1.0, 0.0, 0.0, 1.0 }, .clear_rect = .{ .offset = .{ .x = @intCast(cntx.swapchain.width / 2), .y = 0 }, .extent = .{ .width = cntx.swapchain.width / 2, .height = cntx.swapchain.height / 2 } } },
-            //    .{ .clear_color = [4]f32{ 0.0, 1.0, 0.0, 1.0 }, .clear_rect = .{ .offset = .{ .x = 0, .y = @intCast(cntx.swapchain.height / 2) }, .extent = .{ .width = cntx.swapchain.width / 2, .height = cntx.swapchain.height / 2 } } },
-            //    .{ .clear_color = [4]f32{ 0.0, 0.0, 1.0, 1.0 }, .clear_rect = .{ .offset = .{ .x = @intCast(cntx.swapchain.width / 2), .y = @intCast(cntx.swapchain.height / 2) }, .extent = .{ .width = cntx.swapchain.width / 2, .height = cntx.swapchain.height / 2 } } },
-            //};
-            //for (clear_ops) |cr| {
-            //    var clearRect = [_]rhi.vulkan.vk.ClearRect{.{
-            //        .rect = cr.clear_rect,
-            //        .base_array_layer = 0,
-            //        .layer_count = 1,
-            //    }};
-            //    var clearAttachment = [_]rhi.vulkan.vk.ClearAttachment{.{
-            //        .aspect_mask = .{ .color_bit = true }, //rhi.volk.c.VK_IMAGE_ASPECT_COLOR_BIT,
-            //        .color_attachment = 0,
-            //        .clear_value = .{ .color = .{ .float_32 = cr.clear_color } },
-            //    }};
-            //    dkb.cmdClearAttachments(ring_element.cmds[0].backend.vk.cmd, @intCast(clearAttachment.len), clearAttachment[0..].ptr, @intCast(clearRect.len), clearRect[0..].ptr);
-            //}
-            //
             var viewport = [_]rhi.vulkan.vk.Viewport {
                 .{
                     .x = 0.0,
@@ -137,7 +113,6 @@ fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
             dkb.cmdSetScissor(ring_element.cmds[0].backend.vk.cmd, 0, 1, &scissor_rect);
             dkb.cmdBindPipeline(ring_element.cmds[0].backend.vk.cmd, .graphics, cntx.pipeline);
             dkb.cmdDraw(ring_element.cmds[0].backend.vk.cmd, 3, 1, 0, 0);
-
 
             dkb.cmdEndRendering(ring_element.cmds[0].backend.vk.cmd);
 
@@ -251,7 +226,6 @@ fn app_init(argv: [][*:0]u8) anyerror!core.InitResult(AppContext) {
     const swapchain = try rhi.Swapchain.init(allocator, &renderer, &device, 640, 480, &device.graphics_queue, window_handle, .{});
 
     const application = try allocator.create(AppContext);
-
     const fullscreen_vs = std.fs.cwd().readFileAllocOptions("spv/fullscreen.vert.spv", allocator, .unlimited, .@"4", null) catch |err| {
         std.log.err("Failed to open vertex file: {}", .{err});
         return err;

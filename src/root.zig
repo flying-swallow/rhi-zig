@@ -38,7 +38,6 @@ pub const Buffer = buffer.Buffer;
 pub const Fence = fence.Fence;
 pub const ResourceLoader = resource_loader.ResourceLoader;
 pub const PipelineLayout = pipeline_layout.PipelineLayout;
-pub const GraphicsPipeline = pipeline.GraphicsPipeline;
 pub const Shader = shader.Shader;
 pub const TimeKeeper = @import("time_keeper.zig");
 
