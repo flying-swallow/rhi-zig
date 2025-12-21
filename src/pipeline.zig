@@ -9,6 +9,13 @@ backend: union {
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },
 
+pub fn deinit(self: *Pipeline, renderer: *rhi.Renderer, device: *rhi.Device) void {
+    if (rhi.is_target_selected(.vk, renderer)) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.destroyPipeline(device.backend.vk.device, self.backend.vk.pipeline, null);
+    }
+}
+
 // https://registry.khronos.org/vulkan/specs/latest/man/html/VkPrimitiveTopology.html
 // https://learn.microsoft.com/en-us/windows/win32/api/d3dcommon/ne-d3dcommon-d3d_primitive_topology
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_primitive_topology_type
@@ -50,10 +57,18 @@ pub const FillMode = enum(u1) {
     }
 };
 
-pub const VertexAttributeDesc = struct { d3d: struct {
-    semantic_name: []const u8,
-    sementic_index: u32,
-}, vk: struct { location: u32 }, offset: u32, format: rhi.Format, streamIndex: u16 };
+pub const VertexAttributeDesc = struct { 
+    d3d: struct {
+        semantic_name: []const u8,
+        sementic_index: u32,
+    }, 
+    vk: struct { 
+        location: u32 
+    }, 
+    offset: u32, 
+    format: rhi.Format, 
+    streamIndex: u16 
+};
 
 // https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#primsrast-depthbias-computation
 // https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d10-graphics-programming-guide-output-merger-stage-depth-bias
@@ -75,7 +90,7 @@ pub const DepthBiasDesc = struct {
 
 pub const RasterizationDesc = struct {
     viewport_num: u16,
-    depth_bias: DepthBiasDesc,
+    depth_bias: ?DepthBiasDesc,
     fill_mode: FillMode,
     cull_mode: CullMode,
     front_counter_clockwise: bool,
@@ -287,7 +302,9 @@ pub const GraphicsPipelineDesc = struct {
 pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.Device, desc: *const GraphicsPipelineDesc) !Pipeline {
     var pipline_shader_stages: std.ArrayList(rhi.vulkan.vk.PipelineShaderStageCreateInfo) = .empty;
     var color_blend_attachments: std.ArrayList(rhi.vulkan.vk.PipelineColorBlendAttachmentState) = .empty;
-    var color_attachments: std.ArrayList(rhi.vulkan.vk.Format) = .empty;
+    var color_attachment_formats: std.ArrayList(rhi.vulkan.vk.Format) = .empty;
+    var binding_descriptions: std.ArrayList(rhi.vulkan.vk.VertexInputBindingDescription) = .empty;
+    var attribute_descriptions: std.ArrayList(rhi.vulkan.vk.VertexInputAttributeDescription) = .empty;
     var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
     defer {
         for (pipline_shader_stages.items) |stage| {
@@ -295,7 +312,9 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
         }
         pipline_shader_stages.deinit(alloc);
         color_blend_attachments.deinit(alloc);
-        color_attachments.deinit(alloc);
+        color_attachment_formats.deinit(alloc);
+        binding_descriptions.deinit(alloc);
+        attribute_descriptions.deinit(alloc);
     }
     var dynamic_states = [_]rhi.vulkan.vk.DynamicState{
         .viewport,
@@ -313,22 +332,21 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
     var rasterization_state: rhi.vulkan.vk.PipelineRasterizationStateCreateInfo = .{
         .depth_clamp_enable = desc.rasterization.depth_clamp,
         .rasterizer_discard_enable = false, // not supported d3d12
-        .polygon_mode = desc.rasterization.fill_mode.to_vk(),
+        .polygon_mode = rhi.vulkan.vk_fill_mode(desc.rasterization.fill_mode),
         .cull_mode = .{
             .front_bit = desc.rasterization.cull_mode.front_bit,
             .back_bit = desc.rasterization.cull_mode.back_bit, 
         },
-        //.front_face = desc.rasterization.front_counter_clockwise ? .counter_clockwise : .clockwise,
-        .depth_bias_constant_factor = 0.0,
-        .depth_bias_slope_factor = 0.0,
-        .depth_bias_clamp = 0.0,
-        .depth_bias_enable = .false,
+        .depth_bias_constant_factor = if(desc.rasterization.depth_bias) |bias| bias.constantelse else 0,
+        .depth_bias_slope_factor = if(desc.rasterization.depth_bias) |bias| bias.slope else 0,
+        .depth_bias_clamp = if(desc.rasterization.depth_bias) |bias| bias.clamp  else 0,
+        .depth_bias_enable = if(desc.rasterization.depth_bias) |_| true else false,
         .line_width = 1.0,
     };
 
 
     for (desc.output_merger.color_attachments) |attachment| {
-        color_attachments.append(alloc, rhi.vulkan.vk_format(attachment.format));
+        color_attachment_formats.append(alloc, rhi.vulkan.vk_format(attachment.format));
         try color_blend_attachments.append(alloc, .{
             .blend_enable = if (attachment.blend_enable) .true else .false,
             .src_color_blend_factor = attachment.src_color_blend_factor.to_vk(),
@@ -376,27 +394,48 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
         });
     }
     
-    var vertex_input_state = rhi.vulkan.vk.PipelineVertexInputStateCreateInfo {
-        .vertex_binding_description_count = 0,
-        .vertex_attribute_description_count = 0,
-    };
+    var vertex_input_state = rhi.vulkan.vk.PipelineVertexInputStateCreateInfo {};
 
+    if(desc.vertex_input) |vertex_input| {
+        for (vertex_input.streams) |stream| {
+            try binding_descriptions.append(alloc, .{
+                .binding = stream.binding_slot,
+                .input_rate = switch (stream.step_rate) {
+                    .per_vertex => .vertex,
+                    .per_instance => .instance,
+                },
+            });
+        }
+        for (vertex_input.attributes) |attribute| {
+            try attribute_descriptions.append(alloc, .{
+                .location = attribute.vk.location,
+                .binding = attribute.streamIndex,
+                .format = rhi.vulkan.vk_format(attribute.format),
+                .offset = attribute.offset,
+            });
+        }
+        vertex_input_state = rhi.vulkan.vk.PipelineVertexInputStateCreateInfo {
+            .vertex_binding_description_count = binding_descriptions.items.len,
+            .p_vertex_binding_descriptions = &binding_descriptions.items[0],
+            .vertex_attribute_description_count = attribute_descriptions.items.len,
+            .p_vertex_attribute_descriptions = &attribute_descriptions.items[0],
+        };
+    }
     
     var pipeline_input_assembly = rhi.vulkan.vk.PipelineInputAssemblyStateCreateInfo {
         .topology = rhi.vulkan.vk_topology(desc.input_assembly.toplogy),
-        .primitive_restart_enable = .false,
+        .primitive_restart_enable = if(desc.input_assembly.primative_restart) .true else .false,
     };
     
-    var multisample_state = rhi.vulkan.vk.PipelineMultisampleStateCreateInfo {
-        .rasterization_samples = .{
-            .@"1_bit" = true
-        },
-        .sample_shading_enable = .false,
-        .min_sample_shading = 1.0,
-        .p_sample_mask = null,
-        .alpha_to_coverage_enable = .false,
-        .alpha_to_one_enable = .false,
-    };
+    var multisample_state = rhi.vulkan.vk.PipelineMultisampleStateCreateInfo{}; 
+    if(desc.multisample) |multi| {
+        multisample_state.rasterization_samples = .{};
+        multisample_state.sample_shading_enable = .false;
+        multisample_state.min_sample_shading = 1.0;
+        multisample_state.p_sample_mask = null;
+        multisample_state.alpha_to_coverage_enable = multi.alpha_to_coverage;
+        multisample_state.alpha_to_one_enable = .false;
+    } 
 
     var pipeline_create_info =  [1]rhi.vulkan.vk.GraphicsPipelineCreateInfo {
         .{
@@ -407,17 +446,18 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
             .base_pipeline_index = -1,
             .p_color_blend_state = &pipeline_blend_state,
             .p_rasterization_state = &rasterization_state,
-            .p_multisample_state = &multisample_state,
+            .p_multisample_state =  &multisample_state,
             .p_vertex_input_state = &vertex_input_state,
             .p_viewport_state = &viewport_state,
+            .p_depth_stencil_state = null,
             .p_input_assembly_state = &pipeline_input_assembly,
             .p_dynamic_state = &dynamic_state,
         }
     };
     var pipeline_render_info: rhi.vulkan.vk.PipelineRenderingCreateInfo = .{
-        .color_attachment_count = color_blend_attachments.items.len,
-        .p_color_attachment_formats = &color_blend_attachments.items,
-        .view_mask = 0,
+        .color_attachment_count = color_attachment_formats.items.len,
+        .p_color_attachment_formats = &color_attachment_formats.items,
+        //.view_mask = 0,
         .depth_attachment_format = .undefined,
         .stencil_attachment_format = .undefined,
     };

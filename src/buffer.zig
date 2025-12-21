@@ -27,13 +27,17 @@ backend: union {
 
 pub fn get_mapped_region(self: *Buffer, offset: usize, size: usize) !MappedMemoryRange {
     if (self.mapped_region) |region| {
-        return .{ .buffer = self, .memory_range = region[offset .. offset + size] };
+        return .{ 
+            .offset = offset, 
+            .buffer = self, 
+            .memory_range = region[offset .. offset + size] };
     }
     return error.BufferNotMapped;
 }
 
 pub const MappedMemoryRange = struct {
     pub const Self = @This();
+    offset: usize, // offset within the buffer
     buffer: Buffer,
     memory_range: []u8,
 };

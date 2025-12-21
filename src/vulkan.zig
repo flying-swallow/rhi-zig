@@ -141,19 +141,26 @@ pub fn toShaderBytecode(comptime src: []const u8) [src.len / 4]u32 {
 //    return create_module;
 //}
 
+pub fn vk_fill_mode(fill_mode: rhi.pipeline.FillMode) vk.PolygonMode {
+    return switch (fill_mode) {
+        .wireframe => .line,
+        .solid => .fill,
+    };
+}
+
 pub fn vk_topology(topology: rhi.pipeline.Toplogy) vk.PrimitiveTopology {
     return switch (topology) {
         .point_list => .point_list,
         .line_list => .line_list,
         .line_strip => .line_strip,
-        .triangle_list => vk.PrimitiveTopology.triangle_list,
-        .triangle_strip => vk.PrimitiveTopology.triangle_strip,
-        .triangle_fan => vk.PrimitiveTopology.triangle_fan,
-        .line_list_with_adjacency => vk.PrimitiveTopology.line_list_with_adjacency,
-        .line_strip_with_adjacency => vk.PrimitiveTopology.line_strip_with_adjacency,
-        .triangle_list_with_adjacency => vk.PrimitiveTopology.triangle_list_with_adjacency,
-        .triangle_strip_with_adjacency => vk.PrimitiveTopology.triangle_strip_with_adjacency,
-        .patch_list => vk.PrimitiveTopology.patch_list,
+        .triangle_list => .triangle_list,
+        .triangle_strip => .triangle_strip,
+        .triangle_fan => .triangle_fan,
+        .line_list_with_adjacency => .line_list_with_adjacency,
+        .line_strip_with_adjacency => .line_strip_with_adjacency,
+        .triangle_list_with_adjacency => .triangle_list_with_adjacency,
+        .triangle_strip_with_adjacency => .triangle_strip_with_adjacency,
+        .patch_list => .patch_list,
     };
 }
 

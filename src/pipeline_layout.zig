@@ -35,6 +35,15 @@ backend: union {
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },
 
+pub fn deinit(self: *PipelineLayout, renderer: *rhi.Renderer, device: *rhi.Device) void {
+    if (rhi.is_target_selected(.vk, renderer)) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.destroyPipelineLayout(device.backend.vk.device, self.backend.vk.layout, null);
+    } else if (rhi.is_target_selected(.dx12, renderer)) {
+    } else if (rhi.is_target_selected(.mtl, renderer)) {
+    }
+}
+
 pub const DescriptorRangeDesc = struct {
     base_register_index: u32,
     descriptor_num: u32, // treated as max size if "VARIABLE_SIZED_ARRAY" flag is set

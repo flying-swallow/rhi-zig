@@ -118,6 +118,11 @@ pub const FormatProps = struct {
     is_signed: bool = 0, // signed
     is_srgb: bool = 0, // sRGB
     is_stencil: bool = 0, // has stencil component
+    
+
+    pub fn channel_bit_width(self: FormatProps) usize {
+        return @as(usize, self.red_or_depth_bits + self.green_or_stencil_bits + self.blue_bits + self.alpha_bits + self.luminance_bits);
+    }
 };
 
 
