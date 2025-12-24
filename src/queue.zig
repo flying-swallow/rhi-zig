@@ -2,13 +2,8 @@ const rhi = @import("root.zig");
 const std = @import("std");
 pub const Queue = @This();
 
-backend: union(rhi.Backend) {
-    vk: rhi.wrapper_platform_type(.vk, struct { 
-        queue_flags: rhi.vulkan.vk.QueueFlags = .{}, 
-        family_index: u32 = 0, 
-        slot_index: u32 = 0, 
-        queue: rhi.vulkan.vk.Queue = .null_handle 
-    }),
+backend: union {
+    vk: rhi.wrapper_platform_type(.vk, struct { queue_flags: rhi.vulkan.vk.QueueFlags = .{}, family_index: u32 = 0, slot_index: u32 = 0, queue: rhi.vulkan.vk.Queue = .null_handle }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },

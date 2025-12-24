@@ -34,7 +34,6 @@ pub const StageBits = struct {
 
     // modifiers
     indirect: bool = false, // invoked by "indirect" command (used in addition to other bits)
-
 };
 
 //pub const StageBits = enum(u32) {
@@ -174,7 +173,7 @@ pub const Pool = struct {
     }
 };
 
-pub const CommandringElement = struct {
+pub const CommandRingElement = struct {
     pub const Self = @This();
     cmds: []rhi.Cmd,
     pool: *rhi.Pool,
@@ -223,11 +222,11 @@ pub fn CommandRingBuffer(
             self.cmd_index = 0;
             self.fence_index = 0;
         }
-        pub fn get(self: *Self, renderer: *rhi.Renderer, num_cmds: usize) CommandringElement {
+        pub fn get(self: *Self, renderer: *rhi.Renderer, num_cmds: usize) CommandRingElement {
             if (rhi.is_target_selected(.vk, renderer)) {
                 std.debug.assert(num_cmds <= options.cmd_per_pool);
                 std.debug.assert(num_cmds + self.cmd_index <= options.cmd_per_pool);
-                const result = CommandringElement{ .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds], .pool = &self.pools[self.pool_index], .backend = .{ .vk = .{
+                const result = CommandRingElement{ .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds], .pool = &self.pools[self.pool_index], .backend = .{ .vk = .{
                     .semaphore = if (options.sync_primative) self.backend.vk.semaphores[self.pool_index][self.fence_index] else null,
                     .fence = if (options.sync_primative) self.backend.vk.fences[self.pool_index][self.fence_index] else null,
                 } } };
@@ -280,7 +279,7 @@ pub fn CommandRingBuffer(
                             dkb.destroyFence(device.backend.vk.device, self.backend.vk.fences[pool_index][cmd_index], null);
                         }
                     }
-                    for(0..options.cmd_per_pool) |cmd_index| {
+                    for (0..options.cmd_per_pool) |cmd_index| {
                         self.cmds[pool_index][cmd_index].deinit(renderer, device, &self.pools[pool_index]);
                     }
                     dkb.destroyCommandPool(device.backend.vk.device, self.pools[pool_index].backend.vk.pool, null);
@@ -291,7 +290,7 @@ pub fn CommandRingBuffer(
 }
 
 pub const Cmd = @This();
-backend: union(rhi.Backend) {
+backend: union {
     vk: rhi.wrapper_platform_type(.vk, struct {
         cmd: rhi.vulkan.vk.CommandBuffer,
     }),
@@ -319,10 +318,10 @@ pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, pool: *Pool) !Cmd {
 pub fn deinit(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, pool: *Pool) void {
     if (rhi.is_target_selected(.vk, renderer)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
-        var command = [_]rhi.vulkan.vk.CommandBuffer {
+        var command = [_]rhi.vulkan.vk.CommandBuffer{
             self.backend.vk.cmd,
         };
-        dkb.freeCommandBuffers(device.backend.vk.device, pool.backend.vk.pool, command.len, command[0..].ptr );
+        dkb.freeCommandBuffers(device.backend.vk.device, pool.backend.vk.pool, command.len, command[0..].ptr);
         return;
     } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
     unreachable;

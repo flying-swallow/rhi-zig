@@ -223,17 +223,11 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
         }
         renderer.backend.vk.ikb.getPhysicalDeviceFeatures2(adapter.backend.vk.physical_device, &features);
         //renderer.backend.vk.ikb.dispatch.vkGetPhysicalDeviceFeatures2.?(adapter.backend.vk.physical_device, &features);
-        var device_create_info: rhi.vulkan.vk.DeviceCreateInfo = .{ 
-            .p_next = &features, 
-            .p_queue_create_infos = device_queue_create_info.items.ptr, 
-            .queue_create_info_count = @intCast(device_queue_create_info.items.len), 
-            .pp_enabled_extension_names = enabled_extension_names.items.ptr, 
-            .enabled_extension_count = @intCast(enabled_extension_names.items.len) 
-        };
+        var device_create_info: rhi.vulkan.vk.DeviceCreateInfo = .{ .p_next = &features, .p_queue_create_infos = device_queue_create_info.items.ptr, .queue_create_info_count = @intCast(device_queue_create_info.items.len), .pp_enabled_extension_names = enabled_extension_names.items.ptr, .enabled_extension_count = @intCast(enabled_extension_names.items.len) };
         const device: rhi.vulkan.vk.Device = try ikb.createDevice(adapter.backend.vk.physical_device, &device_create_info, null);
         const dkb = rhi.vulkan.vk.DeviceWrapper.load(device, ikb.dispatch.vkGetDeviceProcAddr.?);
-        
-        for(0..rhi_queues.len) |i| {
+
+        for (0..rhi_queues.len) |i| {
             if (rhi_queues[i]) |*q| {
                 if (q.backend.vk.queue == .null_handle) {
                     q.backend.vk.queue = dkb.getDeviceQueue(device, q.backend.vk.family_index, q.backend.vk.slot_index);
@@ -295,28 +289,20 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
             break :p vma_allocator;
         };
 
-        return .{ 
-            .graphics_queue = if (rhi_queues[0]) |q| q else return error.NoGraphicsQueue, 
-            .compute_queue = rhi_queues[1], 
-            .transfer_queue = rhi_queues[2], 
-            .adapter = adapter.*, 
-            .backend = .{ 
-            .vk = .{
-                    .maintenance_5_feature_enabled = has_maintenance_5,
-                    .conservative_raster_tier = false,
-                    .swapchain_mutable_format = false,
-                    .memory_budget = false,
-                    .dkb = dkb,
-                    .device = device,
-                    .vma_allocator = @ptrCast(vma_allocator), 
-                } 
-            } };
+        return .{ .graphics_queue = if (rhi_queues[0]) |q| q else return error.NoGraphicsQueue, .compute_queue = rhi_queues[1], .transfer_queue = rhi_queues[2], .adapter = adapter.*, .backend = .{ .vk = .{
+            .maintenance_5_feature_enabled = has_maintenance_5,
+            .conservative_raster_tier = false,
+            .swapchain_mutable_format = false,
+            .memory_budget = false,
+            .dkb = dkb,
+            .device = device,
+            .vma_allocator = @ptrCast(vma_allocator),
+        } } };
     }
     return error.Unitialized;
 }
 
 pub fn deinit(self: *Device, renderer: *rhi.Renderer) void {
-
     if (rhi.is_target_selected(.vk, renderer)) {
         vma.c.vmaDestroyAllocator(@ptrCast(self.backend.vk.vma_allocator));
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.backend.vk.dkb;

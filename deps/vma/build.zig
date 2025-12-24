@@ -7,20 +7,18 @@ pub fn build(b: *std.Build) void {
     const module = b.addModule("vma", .{ .root_source_file = b.path("main.zig") });
     module.addIncludePath(upstream.path(""));
 
-    const commonArgs = &[_][]const u8 { "-std=c++17" };
+    const commonArgs = &[_][]const u8{"-std=c++17"};
+    const root_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
+    });
+    root_module.addCSourceFile(.{ .file = b.path("vma_impl.cpp"), .flags = commonArgs });
     const lib = b.addLibrary(.{
         .name = "vma",
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = root_module,
         .linkage = .static,
-    });
-    lib.linkLibC();
-    lib.linkLibCpp(); 
-    lib.addCSourceFile(.{
-        .file = b.path("vma_impl.cpp"), 
-        .flags = commonArgs 
     });
     lib.installHeadersDirectory(
         upstream.path("include"),

@@ -21,6 +21,7 @@ pub const pipeline_layout = @import("pipeline_layout.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const resource_loader = @import("resource_loader.zig");
 pub const shader = @import("shader.zig");
+pub const semaphore = @import("semaphore.zig");
 
 pub const Renderer = renderer.Renderer;
 pub const PhysicalAdapter = physical_adapter.PhysicalAdapter;
@@ -40,14 +41,10 @@ pub const ResourceLoader = resource_loader.ResourceLoader;
 pub const Pipeline = pipeline.Pipeline;
 pub const PipelineLayout = pipeline_layout.PipelineLayout;
 pub const Shader = shader.Shader;
+pub const Semaphore = semaphore.Semaphore;
 pub const TimeKeeper = @import("time_keeper.zig");
 
-pub const Selection = enum {
-    default, 
-    vk,
-    dx12,
-    mtl
-};
+pub const Selection = enum { default, vk, dx12, mtl };
 
 pub const Backend = enum {
     vk,
@@ -58,13 +55,12 @@ pub const Backend = enum {
 pub const platform_api = blk: {
     switch (builtin.os.tag) {
         .windows => break :blk [_]Backend{ .vk, .dx12 },
-        .linux => break :blk [_]Backend{ .vk },
-        .macos => break :blk [_]Backend{ .mtl },
-        .ios => break :blk [_]Backend{ .mtl },
+        .linux => break :blk [_]Backend{.vk},
+        .macos => break :blk [_]Backend{.mtl},
+        .ios => break :blk [_]Backend{.mtl},
         else => break :blk [_]Backend{},
     }
 };
-
 
 pub fn platform_has_api(comptime target: Backend) bool {
     for (platform_api) |t| {
@@ -73,17 +69,17 @@ pub fn platform_has_api(comptime target: Backend) bool {
     return false;
 }
 
-pub fn is_target_selected(comptime api: Backend, ren: *Renderer) bool{
-    switch(api) {
+pub fn is_target_selected(comptime api: Backend, ren: *Renderer) bool {
+    switch (api) {
         .vk => return platform_has_api(.vk) and ren.backend == .vk,
         .dx12 => return platform_has_api(.dx12) and ren.backend == .dx12,
         .mtl => return platform_has_api(.mtl) and ren.backend == .mtl,
     }
 }
 
-pub fn select(ren: *Renderer ,comptime T: type, pass: T, comptime predicate: fn(comptime target: Backend, val: T) void) void {
+pub fn select(ren: *Renderer, comptime T: type, pass: T, comptime predicate: fn (comptime target: Backend, val: T) void) void {
     for (platform_api) |api| {
-        if(ren.backend == api){
+        if (ren.backend == api) {
             predicate(api, pass);
             return;
         }
@@ -91,10 +87,9 @@ pub fn select(ren: *Renderer ,comptime T: type, pass: T, comptime predicate: fn(
 }
 
 pub fn wrapper_platform_type(api: Backend, comptime impl: type) type {
-    if(platform_has_api(api)){
+    if (platform_has_api(api)) {
         return impl;
     } else {
         return void;
     }
 }
-

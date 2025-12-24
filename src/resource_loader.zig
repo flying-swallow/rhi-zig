@@ -25,6 +25,13 @@ pub const BufferTransaction = struct {
     internal: struct { mapped_region: rhi.Buffer.MappedMemoryRange },
 };
 
+pub const TextureTransactionSpecilization = union {
+    vk: rhi.wrapper_platform_type(.vk, struct {
+        image_aspect: rhi.vulkan.vk.ImageAspectFlags, // overload image aspect
+    }),
+    default: struct {},
+};
+
 pub const TextureTransaction = struct {
     target: rhi.Image,
 
@@ -43,8 +50,8 @@ pub const TextureTransaction = struct {
     array_offset: u32,
     mip_offset: u32,
 
-    src_barrier: rhi.Image.Barrier,
-    dst_barrier: rhi.Image.Barrier,
+    // specialization features for backend
+    specialization: TextureTransactionSpecilization,
 
     // begin mapping
     align_row_pitch: u32,
@@ -57,22 +64,15 @@ const UploadJob = struct {
     inner: union(ResourceJobType) {},
 };
 
-//pub fn util_get_texture_subresource_alignement(device: *rhi.Device, format: rhi.Format) usize {
-//    const props = rhi.format.get_props(format);
-//
-//    var((props.block_width * props.block_height) * props.channel_bit_width()) >> 3;
-//
-//    uint32_t blockSize = max(1u, TinyImageFormat_BitSizeOfBlock(fmt) >> 3);
-//    uint32_t alignment = round_up(pRenderer->pProperties->mUploadBufferTextureAlignment, blockSize);
-//    return round_up(alignment, util_get_texture_row_alignment(pRenderer));
-//}
-
 // ResourceLoader manages transfers of resources to the GPU
 // Note: make sure buffers/images are associated with the currect device create additional resource loaders for different devices
 pub fn ResourceLoader(comptime config: ResourceConfig) type {
     return struct {
         pub const Self = @This();
+        pub const ResourceSet = struct {};
+
         pub const TransferCommandGroup = struct {
+            queue: rhi.Queue,
             pool: [config.max_sets]rhi.Pool,
             cmd: [config.max_sets]rhi.Cmd,
 
@@ -80,16 +80,23 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
 
             staging_buffer: [config.max_sets]rhi.Buffer,
             staging_buffer_offset: usize = 0,
-            active_set: usize = 0,
 
             temporary_buffers: std.ArrayList(rhi.Buffer),
-            fence: rhi.Fence,
+            active_set: usize = 0,
 
-            mutex: std.Thread.Mutex = .{},
+            // zig fmt: off
+            backend: struct { 
+                vk: rhi.wrapper_platform_type(.vk, 
+                    struct { 
+                        semaphores: [config.max_sets]rhi.vulkan.vk.Semaphore, 
+                        fences: [config.max_sets]rhi.vulkan.vk.Fence 
+                    }) 
+            },
+            // zig fmt: on
         };
         allocator: std.mem.Allocator,
         device: *rhi.Device,
-        active_set: usize = 0,
+        resource_mutex: std.Thread.Mutex = .{},
         upload_resource: TransferCommandGroup = undefined,
         copy_resource: TransferCommandGroup = undefined,
 
@@ -99,8 +106,20 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         queue_cond: std.Thread.Condition = .{},
         upload_queue: std.ArrayList(UploadJob) = std.ArrayList(UploadJob).empty,
 
-        pub fn acquire_cmd(self: *Self, renderer: *rhi.Renderer, copy_set: *TransferCommandGroup) rhi.Cmd {
+        pub fn acquire_cmd(self: *Self, renderer: *rhi.Renderer, copy_set: *TransferCommandGroup) !rhi.Cmd {
             if (!copy_set.is_recording) {
+                if (rhi.is_target_selected(.vk, renderer)) {
+                    var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
+                    if (try dkb.getFenceStatus(self.device.backend.vk.device) == .not_ready) {
+                        const fences = [_]rhi.vulkan.vk.Fence{copy_set.backend.vk.fences[copy_set.active_set]};
+                        try dkb.waitForFences(self.device.backend.vk.device, 1, fences[0..].ptr, .true, std.math.maxInt(u64));
+                    }
+                }
+                copy_set.staging_buffer_offset = 0;
+                for (copy_set.temporary_buffers.items) |buf| {
+                    vma.c.vmaDestroyBuffer(self.device.backend.vk.vma_allocator, buf.backend.vk.buffer, buf.backend.vk.allocation);
+                }
+                copy_set.temporary_buffers.clearRetainingCapacity();
                 copy_set.pool[copy_set.active_set].reset(self.device, self.device.graphics_queue);
                 copy_set.cmd[copy_set.active_set].begin(renderer, self.device);
                 copy_set.is_recording = true;
@@ -108,20 +127,19 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             return copy_set.cmd[copy_set.active_set];
         }
 
-        pub fn allocate_temporary_buffer(self: *Self, renderer: *rhi.Renderer, copy_set: *TransferCommandGroup, size: usize) !rhi.Buffer.MappedMemoryRange {
+        pub fn allocate_temporary_buffer(self: *Self, renderer: *rhi.Renderer, group: *TransferCommandGroup, size: usize) !rhi.Buffer.MappedMemoryRange {
             const temporary_buffer: rhi.Buffer = if (rhi.is_target_selected(.vk, renderer)) result: {
                 var res: rhi.Buffer = undefined;
                 const allocation_info = vma.c.VmaAllocationCreateInfo{
                     .usage = vma.c.VMA_MEMORY_USAGE_AUTO,
                     .flags = vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT | vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
                 };
-                const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ .s_type = .buffer_create_info, .size = size, .usage = .{
+                const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ .size = size, .usage = .{
                     .transfer_src_bit = true,
                     .transfer_dst_bit = true,
                 } };
                 const vma_info = vma.c.VmaAllocationInfo{};
                 try rhi.vulkan.wrap_vk_result(@enumFromInt(vma.c.vmaCreateBuffer(self.device.backend.vk.vma_allocator, &stage_buffer_create_info, &allocation_info, &res.backend.vk.buffer, &res.backend.vk.allocation, &vma_info)));
-
                 res.mapped_region = @as([*c]u8, @ptrCast(vma_info.pMappedData))[0..size];
                 break :result res;
             } else if (rhi.is_target_selected(.dx12, renderer)) {
@@ -129,51 +147,42 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             } else if (rhi.is_target_selected(.mtl, renderer)) {
                 @compileError("Metal staging buffer not implemented");
             };
-            try copy_set.temporary_buffers.append(self.allocator, temporary_buffer);
+            try group.temporary_buffers.append(self.allocator, temporary_buffer);
 
-            return .{
-                .buffer = temporary_buffer,
-                .memory_range = if (temporary_buffer.mapped_region) |region| region else return error.BufferNotMapped,
-            };
+            return temporary_buffer.get_mapped_region(0, size);
         }
-        pub fn allocate_stage_buffer(self: *Self, group: *TransferCommandGroup, size: usize, alignment: usize) ?rhi.Buffer.MappedMemoryRange {
+
+        pub fn allocate_from_stage_buffer(group: *TransferCommandGroup, size: usize, alignment: usize) ?rhi.Buffer.MappedMemoryRange {
             const memory_request_size = std.mem.alignForward(usize, size, alignment);
             const staged_offset = std.mem.alignForward(usize, group.staging_buffer_offset, alignment);
-            if((staged_offset < config.buffer_size) and memory_request_size <= (config.buffer_size - staged_offset)) {
-                self.staging_buffer_offset = staged_offset + memory_request_size;
+            if ((staged_offset < config.buffer_size) and memory_request_size <= (config.buffer_size - staged_offset)) {
+                group.staging_buffer_offset = staged_offset + memory_request_size;
                 return try group.staging_buffer[group.active_set].get_mapped_region(staged_offset, memory_request_size);
             }
             return null;
         }
 
-        pub fn flush_copy_group(self: *Self, renderer: *rhi.Renderer, group: *TransferCommandGroup) void {
-            _ = renderer;
-            _ = group;
-            _ = self;
-        }
+        //pub fn allocate_stage_memory(self: *Self, renderer: *rhi.Renderer, group: *TransferCommandGroup, size: usize, alignment: usize) !?rhi.Buffer.MappedMemoryRange {
+        //    const memory_request_size = std.mem.alignForward(usize, size, alignment);
+        //    if (memory_request_size > config.buffer_size) {
+        //        std.log.info("Requested size {}/{} exceeds staging buffer size {}", .{ size, memory_request_size, config.buffer_size });
+        //        return try self.allocate_temporary_buffer(group, renderer, memory_request_size);
+        //    }
 
-        pub fn allocate_stage_memory(self: *Self, renderer: *rhi.Renderer, group: *TransferCommandGroup, size: usize, alignment: usize) !?rhi.Buffer.MappedMemoryRange {
-            const memory_request_size = std.mem.alignForward(usize, size, alignment);
-            if (memory_request_size > config.buffer_size) {
-                std.log.info("Requested size {}/{} exceeds staging buffer size {}", .{ size, memory_request_size, config.buffer_size });
-                return try self.allocate_temporary_buffer(group, renderer, memory_request_size);
-            }
-
-            const staged_offset = std.mem.alignForward(usize, self.staging_buffer_offset, alignment);
-            const memory_available = (staged_offset < config.buffer_size) and memory_request_size <= (config.buffer_size - staged_offset);
-            if (memory_available) {
-                self.staging_buffer_offset = staged_offset + memory_request_size;
-                return try self.staging_buffer[self.active_set].get_mapped_region(staged_offset, memory_request_size);
-            } else {
-                return null;
-                //group.active_set = (group.active_set + 1) % config.max_sets;
-                //return .{
-                //    .buffer = &self.staging_buffer[self.active_set],
-                //    .memory_range = undefined,
-                //};
-            }
-        }
-
+        //    const staged_offset = std.mem.alignForward(usize, self.staging_buffer_offset, alignment);
+        //    const memory_available = (staged_offset < config.buffer_size) and memory_request_size <= (config.buffer_size - staged_offset);
+        //    if (memory_available) {
+        //        self.staging_buffer_offset = staged_offset + memory_request_size;
+        //        return try self.staging_buffer[self.active_set].get_mapped_region(staged_offset, memory_request_size);
+        //    } else {
+        //        return null;
+        //        //group.active_set = (group.active_set + 1) % config.max_sets;
+        //        //return .{
+        //        //    .buffer = &self.staging_buffer[self.active_set],
+        //        //    .memory_range = undefined,
+        //        //};
+        //    }
+        //}
 
         fn init_resource_copy_queue(renderer: *rhi.Renderer, queue: *rhi.Queue, device: *rhi.Device) !TransferCommandGroup {
             const staging_buffer: rhi.Buffer = if (rhi.is_target_selected(.vk, renderer)) result: {
@@ -196,13 +205,38 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                 @compileError("Metal staging buffer not implemented");
             };
 
-            const pool = rhi.Pool.init(renderer, device, queue);
-            const cmd = rhi.Cmd.init(renderer, device, &pool);
-            return .{
-                .pool = pool,
-                .cmd = cmd,
-                .staging_buffer = staging_buffer,
-            };
+            var pool: [config.max_sets]rhi.Pool = undefined;
+            var cmd: [config.max_sets]rhi.Cmd = undefined;
+            for (0..config.max_sets) |i| {
+                pool[i] = rhi.Pool.init(renderer, device, queue);
+                cmd[i] = rhi.Cmd.init(renderer, device, &pool[i]);
+            }
+            // zig fmt: off
+            return .{ 
+                .pool = pool, 
+                .cmd = cmd, 
+                .staging_buffer = staging_buffer, 
+                .backend = res: {
+                    if (rhi.is_target_selected(.vk, renderer)) {
+                        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+                        var semaphore_create_info: rhi.vulkan.vk.SemaphoreCreateInfo = .{};
+                        var fence_create_info: rhi.vulkan.vk.FenceCreateInfo = .{
+                            .flags =  .{ .signaled_bit = true } ,
+                        };
+                        var semaphores: [config.max_sets]rhi.vulkan.vk.Semaphore = undefined;
+                        var fences: [config.max_sets]rhi.vulkan.vk.Fence = undefined; 
+                        for (0..config.max_sets) |i| {
+                            semaphores[i] = try dkb.createSemaphore(device.backend.vk.device, &semaphore_create_info, null);
+                            fences[i] = try dkb.createFence(device.backend.vk.device, &fence_create_info, null);
+                        }
+                        break :res .{ .vk = .{
+                            .semaphores = semaphores,
+                            .fences = fences
+                        } };
+                    }
+                    unreachable;
+                } };
+            // zig fmt: on
         }
 
         pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.Device) !ResourceLoader {
@@ -217,82 +251,217 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             return res;
         }
 
-        // make sure pointer is stable before calling this
-        pub fn spawn(self: *Self) void {
-            _ = try std.Thread.spawn(.{ .allocator = self.allocator }, Self.upload_thread, self);
+        pub fn flush_resource_update_vk(self: *Self, renderer: *rhi.Renderer, wait_semaphore_info: []rhi.vulkan.vk.SemaphoreSubmitInfo) struct { fence: rhi.vulkan.vk.Fence, semaphore: rhi.vulkan.vk.Semaphore } {
+            std.debug.assert(renderer.target_api() == .vk);
+            self.resource_mutex.lock();
+            defer self.resource_mutex.unlock();
+
+            const group: *TransferCommandGroup = &self.upload_resource;
+            const active_set = group.active_set;
+            if (!self.upload_resource.is_recording) {
+                return .{ .fence = group.fence[active_set], .semaphore = group.backend.vk.semaphore[active_set] };
+            }
+            var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
+            group.cmd[group.active_set].end(renderer, self.device);
+            const cmd_submit = [_]rhi.vulkan.vk.CommandBufferSubmitInfo{.{
+                .command_buffer = group.cmd[group.active_set].backend.vk.cmd,
+                .device_mask = 0,
+            }};
+
+            const signal_semaphore = [_]rhi.vulkan.vk.SemaphoreSubmitInfo{.{
+                .semaphore = group.backend.vk.semaphore[group.active_set],
+                .value = 0,
+                .stage_mask = .{ .transfer_queue = true },
+                .device_index = 0,
+            }};
+
+            // zig fmt: off
+            var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ 
+                .p_command_buffer_infos = cmd_submit[0..].ptr, 
+                .command_buffer_info_count = cmd_submit.len, 
+                .p_wait_semaphore_infos = wait_semaphore_info[0..].ptr, 
+                .wait_semaphore_info_count = wait_semaphore_info.len, 
+                .p_signal_semaphore_infos = signal_semaphore[0..].ptr, 
+                .signal_semaphore_info_count = signal_semaphore.len 
+            }};
+            // zig fmt: on
+            dkb.queueSubmit2(self.upload_resource.queue, 1, submit_info[0..].ptr, group.backend.backend.vk.fence[active_set]);
+            group.active_set = (group.active_set + 1) % config.max_sets;
+            group.is_recording = false;
+            return .{ .fence = group.fence[active_set], .semaphore = group.backend.vk.semaphore[active_set] };
         }
+
+        //pub fn flush(self: *Self, renderer: *rhi.Renderer, options: union {
+        //    vk: rhi.wrapper_platform_type(.vk, struct {
+
+        //    }),
+        //}) union {
+        //    vk: rhi.wrapper_platform_type(.vk, struct {}),
+        //} {
+        //    const pool: rhi.Pool = self.upload_resource.pool[self.upload_resource.active_set];
+        //    const cmd: rhi.Cmd = self.upload_resource.cmd[self.upload_resource.active_set];
+        //    const fence: rhi.Fence = self.upload_resource.fence[self.upload_resource.active_set];
+        //    const semaphore: rhi.Semaphore = self.upload_resource.semaphore[self.upload_resource.active_set];
+
+        //    if (!self.upload_resource.is_recording) {
+        //        return .{ fence, semaphore };
+        //    }
+        //    var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
+        //    cmd.end(renderer, self.device);
+
+        //    const cmd_submit = [_]rhi.vulkan.vk.CommandBufferSubmitInfo{.{
+        //        .command_buffer = cmd.backend.vk.cmd,
+        //        .device_mask = 0,
+        //    }};
+
+        //    const wait_semaphore_info = [_]rhi.vulkan.vk.SemaphoreSubmitInfo{.{
+        //        .semaphore = semaphore.backend.vk.current_semaphore(),
+        //        .stage_mask = .{ .color_attachment_output_bit = true },
+        //        .value = 0,
+        //        .device_index = 0,
+        //    }};
+
+        //    const semaphore_info = [_]rhi.vulkan.vk.SemaphoreSubmitInfo{.{
+        //        .semaphore = semaphore.backend.vk.semaphore,
+        //        .value = 0,
+        //        .stage_mask = .{
+        //            .all_commands_bit = true,
+        //        },
+        //        .device_index = 0,
+        //    }};
+
+        //    var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{}};
+        //    dkb.queueSubmit2(self.upload_resource.queue, 1, submit_info[0..].ptr, fence.backend.vk.fence);
+
+        //    self.upload_resource.active_set = (self.upload_resource.active_set + 1) % config.max_sets;
+        //    return .{ fence, semaphore };
+        //}
+
+        // make sure pointer is stable before calling this
+        //pub fn spawn(self: *Self) void {
+        //    _ = try std.Thread.spawn(.{ .allocator = self.allocator }, Self.upload_thread, self);
+        //}
 
         pub fn deinit(self: *Self) void {
             _ = self;
         }
 
-        fn upload_thread(self: *Self) void {
-            while (self.is_running) {
-                self.queue_mutex.lock();
-                while (self.is_running and self.upload_queue.len == 0) {
-                    self.queue_cond.wait(&self.queue_mutex);
-                }
-                self.queue_mutex.unlock();
-            }
-        }
+        //fn upload_thread(self: *Self) void {
+        //    while (self.is_running) {
+        //        self.queue_mutex.lock();
+        //        defer self.queue_mutex.unlock();
+        //        while (self.is_running and self.upload_queue.len == 0) {
+        //            self.queue_cond.wait(&self.queue_mutex);
+        //        }
+        //    }
+        //}
 
         pub fn begin_copy_buffer(self: *Self, renderer: *rhi.Renderer, transaction: *BufferTransaction) !void {
             if (rhi.is_target_selected(.vk, renderer)) {
-                self.upload_resource.mutex.lock();
-                const stage_buffer = try self.allocate_stage_memory(self, renderer, &self.upload_resource, transaction.size, 4);
-                if (stage_buffer) |stage| {
-                    transaction.mapped = stage;
+                self.resource_mutex.lock();
+                defer self.resource_mutex.unlock();
+                transaction.mapped = res: {
+                    if (allocate_from_stage_buffer(&self.upload_resource, transaction.size, 4)) |s| {
+                        break :res s;
+                    } else {
+                        break :res self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size, 4);
+                    }
+                };
+
+                if (allocate_from_stage_buffer(&self.upload_resource, transaction.size, 4)) |s| {
+                    transaction.mapped = s;
                 } else {
-                    // allocate temporary buffer
-                    transaction.mapped = try self.allocate_temporary_buffer(self, renderer, &self.upload_resource, transaction.size);
+                    transaction.mapped = self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size, 4);
                 }
-                self.upload_resource.mutex.unlock();
             } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
         }
 
         pub fn end_copy_buffer(self: *Self, renderer: *rhi.Renderer, transaction: *BufferTransaction) !void {
             if (rhi.is_target_selected(.vk, renderer)) {
-                self.upload_resource.mutex.lock();
-                var cmd = self.acquire_cmd(renderer, &self.upload_resource);
                 var buffer_copy = rhi.vulkan.vk.BufferCopy{
                     .srcOffset = transaction.mapped.offset,
                     .dstOffset = transaction.offset,
                     .size = transaction.size,
                 };
-                self.device.backend.vk.vkCmdCopyBuffer(
+                self.resource_mutex.lock();
+                defer self.resource_mutex.unlock();
+                var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
+                var cmd = self.acquire_cmd(renderer, &self.upload_resource);
+                dkb.cmdCopyBuffer(
                     cmd.backend.vk.cmd,
                     transaction.mapped.buffer.backend.vk.buffer,
                     transaction.target.backend.vk.buffer,
                     1,
                     &buffer_copy,
                 );
-                self.upload_resource.mutex.unlock();
             } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
         }
 
-        pub fn begin_copy_texture(self: *Self,renderer: *rhi.Renderer, device: *rhi.Device, transaction: *TextureTransaction) !void {
+        pub fn begin_copy_texture(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device, transaction: *TextureTransaction) !void {
             const aligned_row_pitch = std.mem.alignForward(usize, transaction.row_pitch, device.adapter.upload_buffer_texture_row_alignment);
             const aligned_slice_pitch = std.mem.alignForward(usize, transaction.slice_num * aligned_row_pitch, device.adapter.upload_buffer_texture_slice_alignment);
-
             transaction.align_row_pitch = @as(u32, aligned_row_pitch);
             transaction.align_slice_pitch = @as(u32, aligned_slice_pitch);
             if (rhi.is_target_selected(.vk, renderer)) {
-                const stage_buffer = try self.allocate_stage_memory(self, renderer, &self.upload_resource, transaction.align_slice_pitch, device.adapter.upload_buffer_texture_slice_alignment);
-                if (stage_buffer) |stage| {
-                    transaction.mapped = stage;
-                } else {
-                    // allocate temporary buffer
-                    const temp_buffer = try self.allocate_temporary_buffer(self, renderer, &self.upload_resource, transaction.align_slice_pitch);
-                    transaction.mapped = temp_buffer ;
-                }
+                self.resource_mutex.lock();
+                defer self.resource_mutex.unlock();
+                transaction.mapped = res: {
+                    if (allocate_from_stage_buffer(&self.upload_resource, transaction.align_slice_pitch, 4)) |s| {
+                        break :res s;
+                    } else {
+                        break :res self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size, 4);
+                    }
+                };
             } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
         }
 
-        pub fn end_copy_texture(renderer: *rhi.Renderer, cmd: *rhi.Cmd, device: *rhi.Device, transaction: *TextureTransaction) !void {
-            _ = cmd;
-            _ = device;
-            _ = transaction;
-            if (rhi.is_target_selected(.vk, renderer)) {} else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+        pub fn end_copy_texture(self: *Self, renderer: *rhi.Renderer, transaction: *TextureTransaction) !void {
+            const format_props = rhi.format.get_props(transaction.format);
+            const row_block_num = transaction.row_pitch / format_props.stride;
+            const buffer_row_length = row_block_num * format_props.block_width;
+
+            const slice_row_num = transaction.align_slice_pitch / transaction.row_pitch;
+            const buffer_image_height = slice_row_num * format_props.block_width;
+            if (rhi.is_target_selected(.vk, renderer)) {
+                // zig fmt: off
+                var image_copy = rhi.vulkan.vk.BufferImageCopy{ 
+                    .buffer_offset = transaction.mapped.offset, 
+                    .buffer_row_length = buffer_row_length, 
+                    .buffer_image_height = buffer_image_height, 
+                    .image_offset = .{
+                        .x = transaction.x,
+                        .y = transaction.y,
+                        .z = transaction.z,
+                    }, 
+                    .image_extent = .{
+                        .width = transaction.width,
+                        .height = transaction.height,
+                        .depth = transaction.depth,
+                    }, 
+                    .image_subresource = .{ 
+                        .mip_level = transaction.mipOffset, 
+                        .base_array_layer = transaction.array_offset, 
+                        .layer_count = 1, 
+                        .aspect_mask = switch (transaction.specialization) {
+                            .vk => |s| s.image_aspect,
+                            _ => rhi.vulkan.vk_format_to_image_aspect_flags(transaction.format)
+                        } 
+                    } 
+                };
+                self.resource_mutex.lock();
+                defer self.resource_mutex.unlock();
+                var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
+                var cmd = self.acquire_cmd(renderer, &self.upload_resource);
+                dkb.cmdCopyBufferToImage(cmd.backend.vk.cmd, 
+                    transaction.mapped.buffer.backend.vk.buffer, 
+                    transaction.target.backend.vk.image, 
+                    .{ .transfer_dst_optimal = true }, 
+                    1,
+                    &image_copy
+                );
+                // zig fmt: on
+
+            } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
         }
     };
 }

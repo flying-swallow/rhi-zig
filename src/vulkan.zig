@@ -94,7 +94,18 @@ pub fn debug_utils_messenger(messageSeverity: vk.DebugUtilsMessageSeverityFlagsE
     return .false;
 }
 
-pub fn determains_aspect_mask(format: vk.Format, include_stencil: bool) vk.ImageAspectFlags {
+pub fn vk_format_to_image_aspect_flags(format: rhi.Format) rhi.vulkan.vk.ImageAspectFlags {
+    const props = rhi.format.get_props(format);
+    var result = rhi.vulkan.vk.ImageAspectFlags{ .stencil_bit = props.is_stencil, .depth_bit = props.is_depth };
+
+    if (result.stencil_bit || result.depth_bit) {
+        return result;
+    }
+    result.color_bit = true;
+    return result;
+}
+
+pub fn vk_determains_aspect_mask_format_stencil(format: vk.Format, include_stencil: bool) vk.ImageAspectFlags {
     return switch (format) {
         .d16_unorm, .x8_d24_unorm_pack32, .d32_sfloat => vk.ImageAspectFlags{ .depth_bit = true },
         .s8_uint => vk.ImageAspectFlags{ .stencil_bit = true },

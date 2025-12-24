@@ -3,13 +3,25 @@ const rhi = @import("rhi");
 const builtin = @import("builtin");
 const core = @import("core");
 
+pub const ResourceLoader = rhi.ResourceLoader(.{ .max_sets = 2, .buffer_size = 8 * 1024 * 1024 });
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = 4, .sync_primative = true });
 var allocator: std.mem.Allocator = undefined;
-pub const AppContext = struct { window: *core.sdl.SDL_Window = undefined, allocator: std.mem.Allocator = undefined, renderer: rhi.Renderer = undefined, swapchain: rhi.Swapchain = undefined, device: rhi.Device = undefined, timekeeper: rhi.TimeKeeper = undefined, dirty_resize: bool = false, graphics_cmd_ring: CmdRingBuffer = undefined };
+pub const AppContext = struct {
+    window: *core.sdl.SDL_Window = undefined,
+    allocator: std.mem.Allocator = undefined,
+    renderer: rhi.Renderer = undefined,
+    swapchain: rhi.Swapchain = undefined,
+    device: rhi.Device = undefined,
+    timekeeper: rhi.TimeKeeper = undefined,
+    resource_loader: ResourceLoader = undefined,
+    dirty_resize: bool = false,
+    graphics_cmd_ring: CmdRingBuffer = undefined,
+    pipeline: rhi.vulkan.vk.Pipeline = undefined,
+    layout: rhi.vulkan.vk.PipelineLayout = undefined,
+};
 
 fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
     while (cntx.timekeeper.consume()) {}
-
     // draw
     {
         if (@atomicRmw(bool, &cntx.dirty_resize, .Xchg, false, .monotonic) == true) {
@@ -45,7 +57,7 @@ fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
                     .dst_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
                     .image = img.backend.vk.image,
                     .subresource_range = .{
-                        .aspect_mask = rhi.vulkan.determains_aspect_mask(cntx.swapchain.backend.vk.format, false),
+                        .aspect_mask = rhi.vulkan.vk_determains_aspect_mask_format_stencil(cntx.swapchain.backend.vk.format, false),
                         .base_mip_level = 0,
                         .level_count = 1,
                         .base_array_layer = 0,
@@ -81,29 +93,22 @@ fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
                 };
                 dkb.cmdBeginRendering(ring_element.cmds[0].backend.vk.cmd, &rending_info);
             }
-
-            const clear_ops = [_]struct {
-                clear_color: [4]f32,
-                clear_rect: rhi.vulkan.vk.Rect2D,
-            }{
-                .{ .clear_color = [4]f32{ 0.0, 0.0, 0.0, 1.0 }, .clear_rect = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = cntx.swapchain.width / 2, .height = cntx.swapchain.height / 2 } } },
-                .{ .clear_color = [4]f32{ 1.0, 0.0, 0.0, 1.0 }, .clear_rect = .{ .offset = .{ .x = @intCast(cntx.swapchain.width / 2), .y = 0 }, .extent = .{ .width = cntx.swapchain.width / 2, .height = cntx.swapchain.height / 2 } } },
-                .{ .clear_color = [4]f32{ 0.0, 1.0, 0.0, 1.0 }, .clear_rect = .{ .offset = .{ .x = 0, .y = @intCast(cntx.swapchain.height / 2) }, .extent = .{ .width = cntx.swapchain.width / 2, .height = cntx.swapchain.height / 2 } } },
-                .{ .clear_color = [4]f32{ 0.0, 0.0, 1.0, 1.0 }, .clear_rect = .{ .offset = .{ .x = @intCast(cntx.swapchain.width / 2), .y = @intCast(cntx.swapchain.height / 2) }, .extent = .{ .width = cntx.swapchain.width / 2, .height = cntx.swapchain.height / 2 } } },
-            };
-            for (clear_ops) |cr| {
-                var clearRect = [_]rhi.vulkan.vk.ClearRect{.{
-                    .rect = cr.clear_rect,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                }};
-                var clearAttachment = [_]rhi.vulkan.vk.ClearAttachment{.{
-                    .aspect_mask = .{ .color_bit = true }, //rhi.volk.c.VK_IMAGE_ASPECT_COLOR_BIT,
-                    .color_attachment = 0,
-                    .clear_value = .{ .color = .{ .float_32 = cr.clear_color } },
-                }};
-                dkb.cmdClearAttachments(ring_element.cmds[0].backend.vk.cmd, @intCast(clearAttachment.len), clearAttachment[0..].ptr, @intCast(clearRect.len), clearRect[0..].ptr);
-            }
+            var viewport = [_]rhi.vulkan.vk.Viewport{.{
+                .x = 0.0,
+                .y = 0.0,
+                .width = @floatFromInt(cntx.swapchain.width),
+                .height = @floatFromInt(cntx.swapchain.height),
+                .min_depth = 0.0,
+                .max_depth = 1.0,
+            }};
+            var scissor_rect = [_]rhi.vulkan.vk.Rect2D{.{
+                .offset = .{ .x = 0, .y = 0 },
+                .extent = .{ .width = cntx.swapchain.width, .height = cntx.swapchain.height },
+            }};
+            dkb.cmdSetViewport(ring_element.cmds[0].backend.vk.cmd, 0, 1, &viewport);
+            dkb.cmdSetScissor(ring_element.cmds[0].backend.vk.cmd, 0, 1, &scissor_rect);
+            dkb.cmdBindPipeline(ring_element.cmds[0].backend.vk.cmd, .graphics, cntx.pipeline);
+            dkb.cmdDraw(ring_element.cmds[0].backend.vk.cmd, 3, 1, 0, 0);
 
             dkb.cmdEndRendering(ring_element.cmds[0].backend.vk.cmd);
 
@@ -119,7 +124,7 @@ fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
                     .dst_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
                     .image = img.backend.vk.image,
                     .subresource_range = .{
-                        .aspect_mask = rhi.vulkan.determains_aspect_mask(cntx.swapchain.backend.vk.format, false),
+                        .aspect_mask = rhi.vulkan.vk_determains_aspect_mask_format_stencil(cntx.swapchain.backend.vk.format, false),
                         .base_mip_level = 0,
                         .level_count = 1,
                         .base_array_layer = 0,
@@ -156,18 +161,8 @@ fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
                 .device_index = 0,
             }};
 
-            // zig fmt: off
-            var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ 
-                .p_command_buffer_infos = cmd_submit[0..].ptr, 
-                .command_buffer_info_count = cmd_submit.len, 
-                .p_wait_semaphore_infos = wait_semaphore_info[0..].ptr, 
-                .wait_semaphore_info_count = wait_semaphore_info.len, 
-                .p_signal_semaphore_infos = semaphore_info[0..].ptr, 
-                .signal_semaphore_info_count = semaphore_info.len 
-            }};
-            // zig fmt: on
-            const fence_status = try dkb.getFenceStatus(cntx.device.backend.vk.device, ring_element.backend.vk.fence);
-            std.debug.assert(fence_status == .success);
+            var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ .p_command_buffer_infos = cmd_submit[0..].ptr, .command_buffer_info_count = cmd_submit.len, .p_wait_semaphore_infos = wait_semaphore_info[0..].ptr, .wait_semaphore_info_count = wait_semaphore_info.len, .p_signal_semaphore_infos = semaphore_info[0..].ptr, .signal_semaphore_info_count = semaphore_info.len }};
+            std.debug.assert(try dkb.getFenceStatus(cntx.device.backend.vk.device, ring_element.backend.vk.fence) == .success);
             const reset_fence = [_]rhi.vulkan.vk.Fence{ring_element.backend.vk.fence};
             _ = try dkb.resetFences(cntx.device.backend.vk.device, reset_fence.len, reset_fence[0..].ptr);
             _ = try dkb.queueSubmit2(cntx.device.graphics_queue.backend.vk.queue, 1, submit_info[0..].ptr, ring_element.backend.vk.fence);
@@ -227,6 +222,141 @@ fn app_init(argv: [][*:0]u8) anyerror!core.InitResult(AppContext) {
     const swapchain = try rhi.Swapchain.init(allocator, &renderer, &device, 640, 480, &device.graphics_queue, window_handle, .{});
 
     const application = try allocator.create(AppContext);
+    const fullscreen_vs = std.fs.cwd().readFileAllocOptions("spv/fullscreen.vert.spv", allocator, .unlimited, .@"4", null) catch |err| {
+        std.log.err("Failed to open vertex file: {}", .{err});
+        return err;
+    };
+    defer allocator.free(fullscreen_vs);
+    const mandelbrot_fs = std.fs.cwd().readFileAllocOptions("spv/mandelbrot.frag.spv", allocator, .unlimited, .@"4", null) catch |err| {
+        std.log.err("Failed to open fragment file: {}", .{err});
+        return err;
+    };
+    defer allocator.free(mandelbrot_fs);
+    var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+    var shader_module_create_vs: rhi.vulkan.vk.ShaderModuleCreateInfo = .{
+        .code_size = fullscreen_vs.len,
+        .p_code = @ptrCast(fullscreen_vs.ptr),
+    };
+    const vs_module = dkb.createShaderModule(device.backend.vk.device, &shader_module_create_vs, null) catch |err| {
+        std.log.err("Failed to create vertex shader module: {}", .{err});
+        return err;
+    };
+    defer dkb.destroyShaderModule(device.backend.vk.device, vs_module, null);
+    var shader_module_create_fs: rhi.vulkan.vk.ShaderModuleCreateInfo = .{
+        .code_size = mandelbrot_fs.len,
+        .p_code = @ptrCast(mandelbrot_fs.ptr),
+    };
+    const fs_module = dkb.createShaderModule(device.backend.vk.device, &shader_module_create_fs, null) catch |err| {
+        std.log.err("Failed to create fragment shader module: {}", .{err});
+        return err;
+    };
+    defer dkb.destroyShaderModule(device.backend.vk.device, fs_module, null);
+
+    var stages = [_]rhi.vulkan.vk.PipelineShaderStageCreateInfo{ .{
+        .stage = .{ .vertex_bit = true },
+        .module = vs_module,
+        .p_name = "main",
+    }, .{
+        .stage = .{ .fragment_bit = true },
+        .module = fs_module,
+        .p_name = "main",
+    } };
+    var color_attachment_desc = [_]rhi.vulkan.vk.PipelineColorBlendAttachmentState{.{
+        .blend_enable = .true,
+        .src_color_blend_factor = .one,
+        .dst_color_blend_factor = .zero,
+        .color_blend_op = .add,
+        .src_alpha_blend_factor = .one,
+        .dst_alpha_blend_factor = .zero,
+        .alpha_blend_op = .add,
+        .color_write_mask = .{
+            .r_bit = true,
+            .g_bit = true,
+            .b_bit = true,
+        },
+    }};
+    var dynamic_states = [_]rhi.vulkan.vk.DynamicState{
+        .viewport,
+        .scissor,
+    };
+    var dynamic_state: rhi.vulkan.vk.PipelineDynamicStateCreateInfo = .{
+        .dynamic_state_count = dynamic_states.len,
+        .p_dynamic_states = &dynamic_states,
+    };
+    var pipeline_blend_state: rhi.vulkan.vk.PipelineColorBlendStateCreateInfo = .{
+        .logic_op_enable = .false,
+        .logic_op = .clear,
+        .blend_constants = .{ 0.0, 0.0, 0.0, 0.0 },
+        .attachment_count = color_attachment_desc.len,
+        .p_attachments = &color_attachment_desc,
+    };
+    var viewport_state: rhi.vulkan.vk.PipelineViewportStateCreateInfo = .{
+        .viewport_count = 1,
+        .scissor_count = 1,
+    };
+    var rasterization_state: rhi.vulkan.vk.PipelineRasterizationStateCreateInfo = .{
+        .depth_clamp_enable = .false,
+        .rasterizer_discard_enable = .false,
+        .polygon_mode = .fill,
+        .cull_mode = .{
+            .front_bit = false,
+            .back_bit = false,
+        },
+        .front_face = .clockwise,
+        .depth_bias_constant_factor = 0.0,
+        .depth_bias_slope_factor = 0.0,
+        .depth_bias_clamp = 0.0,
+        .depth_bias_enable = .false,
+        .line_width = 1.0,
+    };
+    var pipeline_input_assembly = rhi.vulkan.vk.PipelineInputAssemblyStateCreateInfo{
+        .topology = .triangle_list,
+        .primitive_restart_enable = .false,
+    };
+    var multisample_state = rhi.vulkan.vk.PipelineMultisampleStateCreateInfo{
+        .rasterization_samples = .{ .@"1_bit" = true },
+        .sample_shading_enable = .false,
+        .min_sample_shading = 1.0,
+        .p_sample_mask = null,
+        .alpha_to_coverage_enable = .false,
+        .alpha_to_one_enable = .false,
+    };
+    var vertex_input_state = rhi.vulkan.vk.PipelineVertexInputStateCreateInfo{
+        .vertex_binding_description_count = 0,
+        .vertex_attribute_description_count = 0,
+    };
+    var pipeline_layout_info = rhi.vulkan.vk.PipelineLayoutCreateInfo{
+        .set_layout_count = 0,
+        .push_constant_range_count = 0,
+    };
+    const pipeline_layout = try dkb.createPipelineLayout(device.backend.vk.device, &pipeline_layout_info, null);
+    errdefer dkb.destroyPipelineLayout(device.backend.vk.device, pipeline_layout, null);
+    var pipeline_create_info = [1]rhi.vulkan.vk.GraphicsPipelineCreateInfo{.{
+        .stage_count = stages.len,
+        .p_stages = &stages,
+        .subpass = 0,
+        .layout = pipeline_layout,
+        .base_pipeline_index = -1,
+        .p_color_blend_state = &pipeline_blend_state,
+        .p_rasterization_state = &rasterization_state,
+        .p_multisample_state = &multisample_state,
+        .p_vertex_input_state = &vertex_input_state,
+        .p_viewport_state = &viewport_state,
+        .p_input_assembly_state = &pipeline_input_assembly,
+        .p_dynamic_state = &dynamic_state,
+    }};
+    var color_attachments = [_]rhi.vulkan.vk.Format{swapchain.backend.vk.format};
+    var pipeline_render_info: rhi.vulkan.vk.PipelineRenderingCreateInfo = .{
+        .color_attachment_count = color_attachments.len,
+        .p_color_attachment_formats = &color_attachments,
+        .view_mask = 0,
+        .depth_attachment_format = .undefined,
+        .stencil_attachment_format = .undefined,
+    };
+    rhi.vulkan.add_next(&pipeline_create_info[0], &pipeline_render_info);
+    var pipeline: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
+    _ = try dkb.createGraphicsPipelines(device.backend.vk.device, .null_handle, 1, &pipeline_create_info, null, &pipeline);
+
     application.* = .{
         .window = window.?,
         .allocator = allocator,
@@ -236,6 +366,8 @@ fn app_init(argv: [][*:0]u8) anyerror!core.InitResult(AppContext) {
         .timekeeper = .{ .tocks_per_s = core.sdl.SDL_GetPerformanceFrequency() },
         .dirty_resize = false,
         .graphics_cmd_ring = try CmdRingBuffer.init(&renderer, &device, &device.graphics_queue),
+        .pipeline = pipeline[0],
+        .layout = pipeline_layout,
     };
     return .{
         .cntx = application,
@@ -247,6 +379,10 @@ fn app_quit(cntx: *AppContext, result: core.sdl.SDL_AppResult) void {
     cntx.device.graphics_queue.wait_queue_idle(&cntx.renderer, &cntx.device) catch |err| {
         std.log.err("Failed to wait graphics queue idle: {}", .{err});
     };
+
+    var dkb: *rhi.vulkan.vk.DeviceWrapper = &cntx.device.backend.vk.dkb;
+    dkb.destroyPipeline(cntx.device.backend.vk.device, cntx.pipeline, null);
+    dkb.destroyPipelineLayout(cntx.device.backend.vk.device, cntx.layout, null);
 
     cntx.graphics_cmd_ring.deinit(&cntx.renderer, &cntx.device);
     cntx.swapchain.deinit(&cntx.renderer, &cntx.device);
