@@ -94,8 +94,8 @@ pub fn debug_utils_messenger(messageSeverity: vk.DebugUtilsMessageSeverityFlagsE
     return .false;
 }
 
-pub fn vk_format_to_image_aspect_flags(format: rhi.Format) rhi.vulkan.vk.ImageAspectFlags {
-    const props = rhi.format.get_props(format);
+pub fn VKImageAspectFlagsFromFormat(format: rhi.Format) rhi.vulkan.vk.ImageAspectFlags {
+    const props = rhi.format.GetProps(format);
     var result = rhi.vulkan.vk.ImageAspectFlags{ .stencil_bit = props.is_stencil, .depth_bit = props.is_depth };
 
     if (result.stencil_bit || result.depth_bit) {
@@ -105,7 +105,7 @@ pub fn vk_format_to_image_aspect_flags(format: rhi.Format) rhi.vulkan.vk.ImageAs
     return result;
 }
 
-pub fn vk_determains_aspect_mask_format_stencil(format: vk.Format, include_stencil: bool) vk.ImageAspectFlags {
+pub fn VKImageSpaceFlagsFromFormatAndStencil(format: vk.Format, include_stencil: bool) vk.ImageAspectFlags {
     return switch (format) {
         .d16_unorm, .x8_d24_unorm_pack32, .d32_sfloat => vk.ImageAspectFlags{ .depth_bit = true },
         .s8_uint => vk.ImageAspectFlags{ .stencil_bit = true },
@@ -126,7 +126,7 @@ pub fn vk_has_extension(properties: []const rhi.vulkan.vk.ExtensionProperties, v
     return false;
 }
 
-pub fn wrap_vk_result(result: vk.Result) !void {
+pub fn VKWrapResult(result: vk.Result) !void {
     if (result != vk.Result.success) {
         std.debug.print("Vulkan error: {d}\n", .{result});
         return error.VulkanError;

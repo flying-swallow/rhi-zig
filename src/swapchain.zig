@@ -68,42 +68,33 @@ backend: union(rhi.Backend) {
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },
 
-
-fn vk_wapchain_create_info_khr_default(option: struct {
-                                        surface: rhi.vulkan.vk.SurfaceKHR, 
-                                        format: rhi.vulkan.vk.Format,
-                                        present_mode: rhi.vulkan.vk.PresentModeKHR,
-                                        color_space: rhi.vulkan.vk.ColorSpaceKHR, 
-                                        width: u32, height: u32,
-                                        image_count: usize
-                                        }) rhi.vulkan.vk.SwapchainCreateInfoKHR {
+fn vk_wapchain_create_info_khr_default(option: struct { surface: rhi.vulkan.vk.SurfaceKHR, format: rhi.vulkan.vk.Format, present_mode: rhi.vulkan.vk.PresentModeKHR, color_space: rhi.vulkan.vk.ColorSpaceKHR, width: u32, height: u32, image_count: usize }) rhi.vulkan.vk.SwapchainCreateInfoKHR {
     return .{
-            .surface = option.surface,
-            .min_image_count = @intCast(option.image_count),
-            .image_format = option.format,
-            .image_color_space = option.color_space,
-            .image_extent = .{
-                .width = option.width,
-                .height = option.height,
-            },
-            .image_array_layers = 1,
-            .image_usage = .{
-                .color_attachment_bit = true,
-                .transfer_src_bit = true,
-            },
-            .image_sharing_mode = .exclusive,
-            .queue_family_index_count = 0,
-            .p_queue_family_indices = null,
-            .pre_transform = .{
-                .identity_bit_khr = true,
-            },
-            .composite_alpha = .{
-                .opaque_bit_khr = true,
-            },
-            .present_mode = option.present_mode,
-            .clipped = .true,
-        };
-
+        .surface = option.surface,
+        .min_image_count = @intCast(option.image_count),
+        .image_format = option.format,
+        .image_color_space = option.color_space,
+        .image_extent = .{
+            .width = option.width,
+            .height = option.height,
+        },
+        .image_array_layers = 1,
+        .image_usage = .{
+            .color_attachment_bit = true,
+            .transfer_src_bit = true,
+        },
+        .image_sharing_mode = .exclusive,
+        .queue_family_index_count = 0,
+        .p_queue_family_indices = null,
+        .pre_transform = .{
+            .identity_bit_khr = true,
+        },
+        .composite_alpha = .{
+            .opaque_bit_khr = true,
+        },
+        .present_mode = option.present_mode,
+        .clipped = .true,
+    };
 }
 
 pub fn image_view(self: *Swapchain, renderer: *rhi.Renderer, index: u32) rhi.Image.ImageView {
@@ -152,10 +143,10 @@ pub fn deinit(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device) vo
     if (rhi.is_target_selected(.vk, renderer)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var ikb: *rhi.vulkan.vk.InstanceWrapper = &renderer.backend.vk.ikb;
-        for(self.backend.vk.signal_semaphores) |sem| {
+        for (self.backend.vk.signal_semaphores) |sem| {
             dkb.destroySemaphore(device.backend.vk.device, sem, null);
         }
-        for(self.backend.vk.views) |view| {
+        for (self.backend.vk.views) |view| {
             dkb.destroyImageView(device.backend.vk.device, view, null);
         }
         dkb.destroySwapchainKHR(device.backend.vk.device, self.backend.vk.swapchain, null);
@@ -188,13 +179,13 @@ pub fn acquire_next_image(self: *Swapchain, renderer: *rhi.Renderer, device: *rh
 }
 
 pub fn resize(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, width: u16, height: u16) !bool {
-    if(width == self.width and height == self.height) {
+    if (width == self.width and height == self.height) {
         return false;
     }
     if (rhi.is_target_selected(.vk, renderer)) {
-       var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
-       const old_swapchain = self.backend.vk.swapchain;
-       var swapchain_create_info = vk_wapchain_create_info_khr_default(.{
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        const old_swapchain = self.backend.vk.swapchain;
+        var swapchain_create_info = vk_wapchain_create_info_khr_default(.{
             .surface = self.backend.vk.surface,
             .format = self.backend.vk.image_format,
             .present_mode = self.backend.vk.present_mode,
@@ -206,7 +197,7 @@ pub fn resize(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, wi
         swapchain_create_info.old_swapchain = old_swapchain;
         self.backend.vk.swapchain = try dkb.createSwapchainKHR(device.backend.vk.device, &swapchain_create_info, null);
         dkb.destroySwapchainKHR(device.backend.vk.device, old_swapchain, null);
-        for(self.backend.vk.views) |view| {
+        for (self.backend.vk.views) |view| {
             dkb.destroyImageView(device.backend.vk.device, view, null);
         }
         self.allocator.free(self.backend.vk.views);
@@ -224,8 +215,8 @@ pub fn resize(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, wi
         errdefer self.allocator.free(images);
         const image_views = try self.allocator.alloc(rhi.vulkan.vk.ImageView, images.len);
         errdefer self.allocator.free(image_views);
-    
-        for(0..images.len) |k| {
+
+        for (0..images.len) |k| {
             const view_create_info: rhi.vulkan.vk.ImageViewCreateInfo = .{
                 .s_type = .image_view_create_info,
                 .image = images[k],

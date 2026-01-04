@@ -3,18 +3,23 @@
     .version = "0.0.0",
     .fingerprint = 0x317e5d7f685d6ba3,
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{ 
-        .vma = .{ .path = "deps/vma", .lazy = true }, 
+    .dependencies = .{
+        .vma = .{ .path = "deps/vma", .lazy = true },
         .zwindows = .{
             .url = "git+https://github.com/zig-gamedev/zwindows.git#e2c049ff9abd7a3d32e5aaa04223fc9eee2c593a",
             .hash = "zwindows-0.2.0-dev-xMZ1u9hgDAAvgSPmVyhXSpSuq3chYsBsUXfb8E_W88Eo",
-        }, .vulkan_headers = .{
+        },
+        .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
             .hash = "N-V-__8AAAkkoQGn5z1yoNVrwqZfnYmZp8AZ5CJgoHRMQI0c",
         },
         .vulkan = .{
-            .url = "git+https://github.com/flying-swallow/vulkan-zig.git#eb9ea3be87747b226b5e9724dab8b26f4c182ea6",
-            .hash = "vulkan-0.0.0-r7Ytx9dDAwBEX_OV94NW6OXLLl4zwqUsxrBJ3hbaVni_",
+            .url = "git+https://github.com/flying-swallow/vulkan-zig.git#c3d6725deffcf7a1b00b6b354cb61533fa637d46",
+            .hash = "vulkan-0.0.0-r7Ytx71EAwCqWX1lykO2PploTKA-GHHmJUUuNyuaabPi",
+        },
+        .sdl = .{
+            .url = "git+https://github.com/castholm/SDL.git#1994ca5dbad5a3e3c670a9ab8533d86cfd97bdc0",
+            .hash = "sdl-0.2.6+3.2.20-7uIn9NgjfwHH5a6HhyLHat2nHU3OP5B05QHhKJKuxEex",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },

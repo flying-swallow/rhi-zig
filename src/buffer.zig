@@ -1,18 +1,7 @@
 const rhi = @import("root.zig");
 const vma = @import("vma");
 const std = @import("std");
-
-//pub const Barrier = struct {
-//    pub const Self = @This();
-//    backend: union {
-//        vk: rhi.wrapper_platform_type(.vk, struct {
-//            stage: rhi.vulkan.vk.PipelineStageFlags2,
-//            access: rhi.vulkan.vk.AccessFlags2,
-//        }),
-//        dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-//        mtl: rhi.wrapper_platform_type(.mtl, struct {}),
-//    },
-//};
+const builtin = @import("builtin");
 
 pub const Buffer = @This();
 mapped_region: ?[]u8 = null,
@@ -25,29 +14,107 @@ backend: union {
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 } = undefined,
 
-pub const BufferUsage = struct {
-    shader_resource: bool = false, // SHADER_RESOURCE                          Read-only shader resource (SRV)
-    shader_resource_storage: bool = false, // SHADER_RESOURCE_STORAGE                  Read/write shader resource (UAV)
-    vertex_buffer: bool = false, // VERTEX_BUFFER                            Vertex buffer
-    index_buffer: bool = false, // INDEX_BUFFER                             Index buffer
-    constant_buffer: bool = false, // CONSTANT_BUFFER                          Constant buffer (D3D11: can't be combined with other usages)
-    argument_buffer: bool = false, // ARGUMENT_BUFFER                          Argument buffer in "Indirect" commands
-    scratch_buffer: bool = false, // SCRATCH_BUFFER                           Scratch buffer in "CmdBuild*" commands
-    shader_binding_table: bool = false, // SHADER_BINDING_TABLE                     Shader binding table (SBT) in "CmdDispatchRays*" commands
-    acceleration_structure_build_input: bool = false, // SHADER_RESOURCE                          Read-only input in "CmdBuildAccelerationStructures" command
-    acceleration_structure_storage: bool = false, // ACCELERATION_STRUCTURE_READ/WRITE        (INTERNAL) acceleration structure storage
-    micromap_build_input: bool = false, // SHADER_RESOURCE                          Read-only input in "CmdBuildMicromaps" command
-    micromap_storage: bool = false, // MICROMAP_READ/WRITE                      (INTERNAL) micromap storage
+//  General buffer initialization function
+pub fn init_general(
+    renderer: *rhi.Renderer,
+    device: *rhi.Device,
+    options: struct {
+        size: usize,
+        stride: usize = 0,
+        persistant_map: bool = false,
+        // vk: sequential_access indicates that the mapped memory will be written sequentially
+        sequential_access: bool = false,
+        usage: struct {
+            // zig fmt: off
+            shader_resource: bool = false,                     // SHADER_RESOURCE                          Read-only shader resource (SRV)
+            shader_resource_storage: bool = false,             // SHADER_RESOURCE_STORAGE                  Read/write shader resource (UAV)
+            vertex_buffer: bool = false,                       // VERTEX_BUFFER                            Vertex buffer
+            index_buffer: bool = false,                        // INDEX_BUFFER                             Index buffer
+            constant_buffer: bool = false,                     // CONSTANT_BUFFER                          Constant buffer (D3D11: can't be combined with other usages)
+            argument_buffer: bool = false,                     // ARGUMENT_BUFFER                          Argument buffer in "Indirect" commands
+            scratch_buffer: bool = false,                      // SCRATCH_BUFFER                           Scratch buffer in "CmdBuild*" commands
+            shader_binding_table: bool = false,                // SHADER_BINDING_TABLE                     Shader binding table (SBT) in "CmdDispatchRays*" commands
+            acceleration_structure_build_input: bool = false,  // SHADER_RESOURCE                          Read-only input in "CmdBuildAccelerationStructures" command
+            acceleration_structure_storage: bool = false,      // ACCELERATION_STRUCTURE_READ/WRITE        (INTERNAL) acceleration structure storage
+            micromap_build_input: bool = false,                // SHADER_RESOURCE                          Read-only input in "CmdBuildMicromaps" command
+            micromap_storage: bool = false,                    // MICROMAP_READ/WRITE                      (INTERNAL) micromap storage
+            // zig fmt: on
+        },
+        buffer_usage: enum { auto, prefer_device, prefer_host } = .auto,
+    },
+) !Buffer {
+    if (rhi.is_target_selected(.vk, renderer)) {
+        // zig fmt: off
+        var usage  = rhi.vulkan.vk.BufferUsageFlags{
+            .shader_device_address_bit = device.adapter.backend.vk.is_buffer_device_address_supported,
+            .transfer_dst_bit = true,
+            .transfer_src_bit = true,
+            .vertex_buffer_bit = options.usage.vertex_buffer,
+            .index_buffer_bit = options.usage.index_buffer,
+            .uniform_buffer_bit = options.usage.constant_buffer,
+            .indirect_buffer_bit = options.usage.argument_buffer,
+            .storage_buffer_bit = options.usage.scratch_buffer,
+            .shader_binding_table_bit_khr = options.usage.shader_binding_table,
+            .acceleration_structure_storage_bit_khr = options.usage.acceleration_structure_storage,
+            .acceleration_structure_build_input_read_only_bit_khr = options.usage.acceleration_structure_build_input,
+            .micromap_storage_bit_ext = options.usage.micromap_storage,
+            .micromap_build_input_read_only_bit_ext = options.usage.micromap_build_input
+        };
+        // zig fmt: on
+        if (options.stride == 0 or options.stride == 4) {
+            if (options.usage.shader_resource)
+                usage.uniform_texel_buffer_bit = true;
+            if (options.usage.shader_resource_storage)
+                usage.storage_texel_buffer_bit = true;
+        }
+        if (options.stride > 0)
+            usage.storage_buffer_bit = true; // so called SSBO, can be R/W in shaders
+        var allocation_info: vma.c.VmaAllocationCreateInfo = .{};
+        allocation_info.usage = switch (options.buffer_usage) {
+            .prefer_device => vma.c.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .prefer_host => vma.c.VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+            .auto => vma.c.VMA_MEMORY_USAGE_AUTO,
+        };
 
-//    pub fn vk_buffer_usage_flags(self: BufferUsage, device: *rhi.Device) rhi.vulkan.vk.BufferUsageFlags {
-//        return .{
-//            .shader_device_address_bit = device.adapter.backend.vk.is_buffer_device_address_supported
-//        };
-//
-//    }
-};
+        if (options.persistant_map) {
+            allocation_info.flags |= if (options.sequential_access)
+                vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
+            else
+                vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+            allocation_info.flags |= vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT;
+        }
+        var buffer_create_info: rhi.vulkan.vk.BufferCreateInfo = .{
+            .sharing_mode = .exclusive,
+            .size = options.size,
+            .usage = usage,
+        };
+        var vma_info = vma.c.VmaAllocationInfo{};
+        var vk_buffer: vma.c.VkBuffer = undefined;
+        var vma_alloc: vma.c.VmaAllocation = undefined;
+        // zig fmt: off
+        try rhi.vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateBuffer(
+            device.backend.vk.vma_allocator, 
+            @ptrCast(&buffer_create_info), 
+            &allocation_info, 
+            &vk_buffer, 
+            &vma_alloc, 
+            &vma_info)));
+        // zig fmt: on
+        return .{
+            .backend = .{ .vk = .{
+                .buffer = @enumFromInt(@intFromPtr(vk_buffer)),
+                .allocation = vma_alloc,
+            } },
+            .mapped_region = if (vma_info.pMappedData != null)
+                @as([*c]u8, @ptrCast(vma_info.pMappedData))[0..options.size]
+            else
+                null,
+        };
+    }
+    unreachable;
+}
 
-//pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, options: struct { 
+//pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
 //    size: usize,
 //    stride: usize,
 //    usage: BufferUsage

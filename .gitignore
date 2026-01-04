@@ -1,3 +1,4 @@
 # Zig build artifacts
 zig-out/
 .zig-cache/
+example_assets/*.spv

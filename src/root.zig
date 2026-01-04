@@ -3,7 +3,6 @@ const std = @import("std");
 
 const builtin = @import("builtin");
 
-pub const vulkan = @import("vulkan.zig");
 pub const vma = @import("vma");
 pub const format = @import("format.zig");
 pub const renderer = @import("renderer.zig");
@@ -69,6 +68,8 @@ pub fn platform_has_api(comptime target: Backend) bool {
     return false;
 }
 
+pub const vulkan = if (platform_has_api(.vk)) @import("vulkan.zig") else void;
+
 pub fn is_target_selected(comptime api: Backend, ren: *Renderer) bool {
     switch (api) {
         .vk => return platform_has_api(.vk) and ren.backend == .vk,
@@ -77,16 +78,16 @@ pub fn is_target_selected(comptime api: Backend, ren: *Renderer) bool {
     }
 }
 
-pub fn select(ren: *Renderer, comptime T: type, pass: T, comptime predicate: fn (comptime target: Backend, val: T) void) void {
-    for (platform_api) |api| {
-        if (ren.backend == api) {
-            predicate(api, pass);
-            return;
-        }
-    }
-}
+//pub fn select(ren: *Renderer, comptime T: type, pass: T, comptime predicate: fn (comptime target: Backend, val: T) void) void {
+//    for (platform_api) |api| {
+//        if (ren.backend == api) {
+//            predicate(api, pass);
+//            return;
+//        }
+//    }
+//}
 
-pub fn wrapper_platform_type(api: Backend, comptime impl: type) type {
+pub fn wrapper_platform_type(comptime api: Backend, comptime impl: type) type {
     if (platform_has_api(api)) {
         return impl;
     } else {

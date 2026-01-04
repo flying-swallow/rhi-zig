@@ -1,13 +1,13 @@
 const std = @import("std");
 const rhi = @import("rhi");
 const builtin = @import("builtin");
-const core = @import("core");
+const sdl_application = @import("./sdl_application.zig");
 
 pub const ResourceLoader = rhi.ResourceLoader(.{ .max_sets = 2, .buffer_size = 8 * 1024 * 1024 });
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = 4, .sync_primative = true });
 var allocator: std.mem.Allocator = undefined;
 pub const AppContext = struct {
-    window: *core.sdl.SDL_Window = undefined,
+    window: *sdl_application.sdl.SDL_Window = undefined,
     allocator: std.mem.Allocator = undefined,
     renderer: rhi.Renderer = undefined,
     swapchain: rhi.Swapchain = undefined,
@@ -20,17 +20,17 @@ pub const AppContext = struct {
     layout: rhi.vulkan.vk.PipelineLayout = undefined,
 };
 
-fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
+fn iterate_handler(cntx: *AppContext) anyerror!sdl_application.sdl.SDL_AppResult {
     while (cntx.timekeeper.consume()) {}
     // draw
     {
         if (@atomicRmw(bool, &cntx.dirty_resize, .Xchg, false, .monotonic) == true) {
             var w: c_int = 0;
             var h: c_int = 0;
-            if (core.sdl.SDL_GetWindowSize(cntx.window, &w, &h)) {
+            if (sdl_application.sdl.SDL_GetWindowSize(cntx.window, &w, &h)) {
                 _ = try cntx.swapchain.resize(&cntx.renderer, &cntx.device, @intCast(w), @intCast(h));
             } else {
-                std.log.err("{s}", .{core.sdl.SDL_GetError()});
+                std.log.err("{s}", .{sdl_application.sdl.SDL_GetError()});
             }
         }
 
@@ -57,7 +57,7 @@ fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
                     .dst_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
                     .image = img.backend.vk.image,
                     .subresource_range = .{
-                        .aspect_mask = rhi.vulkan.determains_aspect_mask(cntx.swapchain.backend.vk.format, false),
+                        .aspect_mask = rhi.vulkan.VKImageSpaceFlagsFromFormatAndStencil(cntx.swapchain.backend.vk.format, false),
                         .base_mip_level = 0,
                         .level_count = 1,
                         .base_array_layer = 0,
@@ -124,7 +124,7 @@ fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
                     .dst_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
                     .image = img.backend.vk.image,
                     .subresource_range = .{
-                        .aspect_mask = rhi.vulkan.determains_aspect_mask(cntx.swapchain.backend.vk.format, false),
+                        .aspect_mask = rhi.vulkan.VKImageSpaceFlagsFromFormatAndStencil(cntx.swapchain.backend.vk.format, false),
                         .base_mip_level = 0,
                         .level_count = 1,
                         .base_array_layer = 0,
@@ -180,32 +180,32 @@ fn iterate_handler(cntx: *AppContext) anyerror!core.sdl.SDL_AppResult {
             _ = try dkb.queuePresentKHR(cntx.device.graphics_queue.backend.vk.queue, &present_info);
         }
     }
-    cntx.timekeeper.produce(core.sdl.SDL_GetPerformanceCounter());
-    return core.sdl.SDL_APP_CONTINUE;
+    cntx.timekeeper.produce(sdl_application.sdl.SDL_GetPerformanceCounter());
+    return sdl_application.sdl.SDL_APP_CONTINUE;
 }
 
-fn app_init(argv: [][*:0]u8) anyerror!core.InitResult(AppContext) {
+fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(AppContext) {
     _ = argv;
-    if (core.sdl.SDL_SetAppMetadata("Tabletop", "0.0.0", "tabletop") == false) {
+    if (sdl_application.sdl.SDL_SetAppMetadata("Tabletop", "0.0.0", "tabletop") == false) {
         return error.SetAppMetadataFailed;
     }
-    if (core.sdl.SDL_Init(core.sdl.SDL_INIT_VIDEO) == false) {
+    if (sdl_application.sdl.SDL_Init(sdl_application.sdl.SDL_INIT_VIDEO) == false) {
         return error.SDLInitFailed;
     }
 
-    const window = core.sdl.SDL_CreateWindow("00-helloworld", 640, 480, core.sdl.SDL_WINDOW_RESIZABLE);
+    const window = sdl_application.sdl.SDL_CreateWindow("00-helloworld", 640, 480, sdl_application.sdl.SDL_WINDOW_RESIZABLE);
     if (window == null) return error.CreateWindowFailed;
-    errdefer core.sdl.SDL_DestroyWindow(window);
+    errdefer sdl_application.sdl.SDL_DestroyWindow(window);
 
     const window_handle: rhi.WindowHandle = p: {
         if (builtin.os.tag == .windows) {} else if (builtin.os.tag == .linux) {
-            if (std.mem.eql(u8, std.mem.sliceTo(core.sdl.SDL_GetCurrentVideoDriver(), 0), "x11")) {
+            if (std.mem.eql(u8, std.mem.sliceTo(sdl_application.sdl.SDL_GetCurrentVideoDriver(), 0), "x11")) {
                 break :p rhi.WindowHandle{ .x11 = .{
-                    .display = core.sdl.SDL_GetPointerProperty(core.sdl.SDL_GetWindowProperties(window), core.sdl.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null).?,
-                    .window = @intCast(core.sdl.SDL_GetNumberProperty(core.sdl.SDL_GetWindowProperties(window), core.sdl.SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)),
+                    .display = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null).?,
+                    .window = @intCast(sdl_application.sdl.SDL_GetNumberProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)),
                 } };
-            } else if (std.mem.eql(u8, std.mem.sliceTo(core.sdl.SDL_GetCurrentVideoDriver(), 0), "wayland")) {
-                break :p rhi.WindowHandle{ .wayland = .{ .display = core.sdl.SDL_GetPointerProperty(core.sdl.SDL_GetWindowProperties(window), core.sdl.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null).?, .surface = core.sdl.SDL_GetPointerProperty(core.sdl.SDL_GetWindowProperties(window), core.sdl.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null).?, .shell_surface = null } };
+            } else if (std.mem.eql(u8, std.mem.sliceTo(sdl_application.sdl.SDL_GetCurrentVideoDriver(), 0), "wayland")) {
+                break :p rhi.WindowHandle{ .wayland = .{ .display = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null).?, .surface = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null).?, .shell_surface = null } };
             }
         } else if (builtin.os.tag == .macos or builtin.os.tag == .ios) {}
         return error.SdlError;
@@ -221,13 +221,17 @@ fn app_init(argv: [][*:0]u8) anyerror!core.InitResult(AppContext) {
     var device = try rhi.Device.init(allocator, &renderer, &adapters.items[selected_adapter_index]);
     const swapchain = try rhi.Swapchain.init(allocator, &renderer, &device, 640, 480, &device.graphics_queue, window_handle, .{});
 
+    var threads = std.Io.Threaded.init_single_threaded;
+    const io = threads.io();
+
     const application = try allocator.create(AppContext);
-    const fullscreen_vs = std.fs.cwd().readFileAllocOptions("spv/fullscreen.vert.spv", allocator, .unlimited, .@"4", null) catch |err| {
+    const fullscreen_vs = std.Io.Dir.cwd().readFileAllocOptions(io, "example_assets/fullscreen.vert.spv", allocator, .unlimited, .@"4", null) catch |err| {
         std.log.err("Failed to open vertex file: {}", .{err});
         return err;
     };
+
     defer allocator.free(fullscreen_vs);
-    const mandelbrot_fs = std.fs.cwd().readFileAllocOptions("spv/mandelbrot.frag.spv", allocator, .unlimited, .@"4", null) catch |err| {
+    const mandelbrot_fs = std.Io.Dir.cwd().readFileAllocOptions(io, "example_assets/mandelbrot.frag.spv", allocator, .unlimited, .@"4", null) catch |err| {
         std.log.err("Failed to open fragment file: {}", .{err});
         return err;
     };
@@ -363,7 +367,7 @@ fn app_init(argv: [][*:0]u8) anyerror!core.InitResult(AppContext) {
         .renderer = renderer,
         .swapchain = swapchain,
         .device = device,
-        .timekeeper = .{ .tocks_per_s = core.sdl.SDL_GetPerformanceFrequency() },
+        .timekeeper = .{ .tocks_per_s = sdl_application.sdl.SDL_GetPerformanceFrequency() },
         .dirty_resize = false,
         .graphics_cmd_ring = try CmdRingBuffer.init(&renderer, &device, &device.graphics_queue),
         .pipeline = pipeline[0],
@@ -371,11 +375,11 @@ fn app_init(argv: [][*:0]u8) anyerror!core.InitResult(AppContext) {
     };
     return .{
         .cntx = application,
-        .result = core.sdl.SDL_APP_CONTINUE,
+        .result = sdl_application.sdl.SDL_APP_CONTINUE,
     };
 }
 
-fn app_quit(cntx: *AppContext, result: core.sdl.SDL_AppResult) void {
+fn app_quit(cntx: *AppContext, result: sdl_application.sdl.SDL_AppResult) void {
     cntx.device.graphics_queue.wait_queue_idle(&cntx.renderer, &cntx.device) catch |err| {
         std.log.err("Failed to wait graphics queue idle: {}", .{err});
     };
@@ -393,17 +397,17 @@ fn app_quit(cntx: *AppContext, result: core.sdl.SDL_AppResult) void {
     std.debug.print("App quit called with result: {any}\n", .{result});
 }
 
-fn app_event(cntx: *AppContext, event: *core.sdl.SDL_Event) anyerror!core.sdl.SDL_AppResult {
+fn app_event(cntx: *AppContext, event: *sdl_application.sdl.SDL_Event) anyerror!sdl_application.sdl.SDL_AppResult {
     switch (event.type) {
-        core.sdl.SDL_EVENT_QUIT => {
-            return core.sdl.SDL_APP_SUCCESS;
+        sdl_application.sdl.SDL_EVENT_QUIT => {
+            return sdl_application.sdl.SDL_APP_SUCCESS;
         },
-        core.sdl.SDL_EVENT_WINDOW_RESIZED => {
+        sdl_application.sdl.SDL_EVENT_WINDOW_RESIZED => {
             @atomicStore(bool, &cntx.dirty_resize, true, .monotonic);
         },
         else => {},
     }
-    return core.sdl.SDL_APP_CONTINUE;
+    return sdl_application.sdl.SDL_APP_CONTINUE;
 }
 
 pub fn main() !void {
@@ -413,7 +417,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     allocator = gpa.allocator();
 
-    _ = core.SdlApplicaton(AppContext, .{
+    _ = sdl_application.SdlApplicaton(AppContext, .{
         .iterate_handler = iterate_handler,
         .app_init = app_init,
         .app_event = app_event,

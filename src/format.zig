@@ -96,7 +96,7 @@ pub const Format = enum(u16) {
     etc2_eac_r11g11_snorm,
 };
 
-pub const FormatProps = struct {
+pub const FormatProperties = struct {
     name: []const u8, // format name
     format: Format, // self
     red_or_depth_bits: u8 = 0,
@@ -120,13 +120,13 @@ pub const FormatProps = struct {
     is_stencil: bool = 0, // has stencil component
     
 
-    pub fn channel_bit_width(self: FormatProps) usize {
+    pub fn channel_bit_width(self: FormatProperties) usize {
         return @as(usize, self.red_or_depth_bits + self.green_or_stencil_bits + self.blue_bits + self.alpha_bits + self.luminance_bits);
     }
 };
 
 
-pub fn get_props(format: Format) FormatProps {
+pub fn GetProps(format: Format) FormatProperties {
     switch (format) {
         .l8_a8_unorm => .{
             .name = "l8_a8_unorm",
@@ -923,6 +923,6 @@ pub fn get_props(format: Format) FormatProps {
             .is_norm = 1,
             .is_signed = 1,
         },
-        else => FormatProps{ .name = "unknown", .format = .unknown },
+        else => FormatProperties{ .name = "unknown", .format = .unknown },
     }
 }

@@ -146,16 +146,16 @@ pub const Pool = struct {
     },
 
     pub fn reset(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device) !void {
-        if (rhi.is_target_selected(.vk, renderer)) {
+        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             try dkb.resetCommandPool(device.backend.vk.device, self.backend.vk.pool, .{});
             return;
-        } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+        } 
         unreachable;
     }
 
     pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, queue: *rhi.Queue) !Self {
-        if (rhi.is_target_selected(.vk, renderer)) {
+        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             var cmd_pool_create_info = rhi.vulkan.vk.CommandPoolCreateInfo{
                 .flags = .{
@@ -168,7 +168,7 @@ pub const Pool = struct {
                 .queue = queue,
                 .pool = pool,
             } } };
-        } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+        }
         return error.UnsupportedBackend;
     }
 };

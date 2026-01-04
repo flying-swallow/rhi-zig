@@ -16,7 +16,7 @@ backend: union {
         swapchain_mutable_format: bool,
         memory_budget: bool,
         device: rhi.vulkan.vk.Device,
-        vma_allocator: vma.c.VmaAllocation,
+        vma_allocator: vma.c.VmaAllocator,
         dkb: rhi.vulkan.vk.DeviceWrapper,
     }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
@@ -285,7 +285,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
             };
             // zig fmt: on
             var vma_allocator: vma.c.VmaAllocator = null;
-            try rhi.vulkan.wrap_vk_result(@enumFromInt(vma.c.vmaCreateAllocator(&vma_create_info, &vma_allocator)));
+            try rhi.vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateAllocator(&vma_create_info, &vma_allocator)));
             break :p vma_allocator;
         };
 
@@ -296,7 +296,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
             .memory_budget = false,
             .dkb = dkb,
             .device = device,
-            .vma_allocator = @ptrCast(vma_allocator),
+            .vma_allocator = vma_allocator,
         } } };
     }
     return error.Unitialized;

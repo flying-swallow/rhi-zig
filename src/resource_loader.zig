@@ -25,13 +25,6 @@ pub const BufferTransaction = struct {
     internal: struct { mapped_region: rhi.Buffer.MappedMemoryRange },
 };
 
-pub const TextureTransactionSpecilization = union {
-    vk: rhi.wrapper_platform_type(.vk, struct {
-        image_aspect: rhi.vulkan.vk.ImageAspectFlags, // overload image aspect
-    }),
-    default: struct {},
-};
-
 pub const TextureTransaction = struct {
     target: rhi.Image,
 
@@ -49,9 +42,6 @@ pub const TextureTransaction = struct {
 
     array_offset: u32,
     mip_offset: u32,
-
-    // specialization features for backend
-    specialization: TextureTransactionSpecilization,
 
     // begin mapping
     align_row_pitch: u32,
@@ -72,7 +62,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         pub const ResourceSet = struct {};
 
         pub const TransferCommandGroup = struct {
-            queue: rhi.Queue,
+            queue: *rhi.Queue,
             pool: [config.max_sets]rhi.Pool,
             cmd: [config.max_sets]rhi.Cmd,
 
@@ -85,7 +75,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             active_set: usize = 0,
 
             // zig fmt: off
-            backend: struct { 
+            backend: union { 
                 vk: rhi.wrapper_platform_type(.vk, 
                     struct { 
                         semaphores: [config.max_sets]rhi.vulkan.vk.Semaphore, 
@@ -139,7 +129,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                     .transfer_dst_bit = true,
                 } };
                 const vma_info = vma.c.VmaAllocationInfo{};
-                try rhi.vulkan.wrap_vk_result(@enumFromInt(vma.c.vmaCreateBuffer(self.device.backend.vk.vma_allocator, &stage_buffer_create_info, &allocation_info, &res.backend.vk.buffer, &res.backend.vk.allocation, &vma_info)));
+                try rhi.vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateBuffer(self.device.backend.vk.vma_allocator, &stage_buffer_create_info, &allocation_info, &res.backend.vk.buffer, &res.backend.vk.allocation, &vma_info)));
                 res.mapped_region = @as([*c]u8, @ptrCast(vma_info.pMappedData))[0..size];
                 break :result res;
             } else if (rhi.is_target_selected(.dx12, renderer)) {
@@ -185,37 +175,49 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         //}
 
         fn init_resource_copy_queue(renderer: *rhi.Renderer, queue: *rhi.Queue, device: *rhi.Device) !TransferCommandGroup {
-            const staging_buffer: rhi.Buffer = if (rhi.is_target_selected(.vk, renderer)) result: {
-                var res: rhi.Buffer = undefined;
-                const allocation_info = vma.c.VmaAllocationCreateInfo{
-                    .usage = vma.c.VMA_MEMORY_USAGE_AUTO,
-                    .flags = vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT | vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-                };
-                const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ .sType = .buffer_create_info, .size = config.buffer_size, .usage = .{
-                    .transfer_src_bit = true,
-                    .transfer_dst_bit = true,
-                } };
-                const vma_info = vma.c.VmaAllocationInfo{};
-                try vulkan.wrap_err(vma.c.vmaCreateBuffer(device.backend.vk.vma_allocator, &stage_buffer_create_info, &allocation_info, &res.backend.vk.buffer, &res.backend.vk.allocation, &vma_info));
-                res.mapped_region = @as([*c]u8, @ptrCast(vma_info.pMappedDatai))[0..config.buffer_size];
-                break :result res;
-            } else if (rhi.is_target_selected(.dx12, renderer)) {
-                @compileError("Metal staging buffer not implemented");
-            } else if (rhi.is_target_selected(.mtl, renderer)) {
-                @compileError("Metal staging buffer not implemented");
-            };
+            var staging_buffer: [config.max_sets]rhi.Buffer = undefined;
 
             var pool: [config.max_sets]rhi.Pool = undefined;
             var cmd: [config.max_sets]rhi.Cmd = undefined;
             for (0..config.max_sets) |i| {
-                pool[i] = rhi.Pool.init(renderer, device, queue);
-                cmd[i] = rhi.Cmd.init(renderer, device, &pool[i]);
+                pool[i] = try rhi.Pool.init(renderer, device, queue);
+                cmd[i] = try rhi.Cmd.init(renderer, device, &pool[i]);
+
+                if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+                    const allocation_info = vma.c.VmaAllocationCreateInfo{
+                        .usage = vma.c.VMA_MEMORY_USAGE_AUTO,
+                        .flags = vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT | vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                    };
+                    const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ .size = config.buffer_size, .sharing_mode = .exclusive, .usage = .{
+                        .transfer_src_bit = true,
+                        .transfer_dst_bit = true,
+                    } };
+                    var vma_info = vma.c.VmaAllocationInfo{};
+                    var vk_buffer: vma.c.VkBuffer = undefined;
+                    var vma_alloc: vma.c.VmaAllocation = undefined;
+                    try vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateBuffer(device.backend.vk.vma_allocator, @ptrCast(&stage_buffer_create_info), &allocation_info, &vk_buffer, &vma_alloc, &vma_info)));
+                    staging_buffer[i] = .{
+                        .backend = .{ .vk = .{
+                            .buffer = @enumFromInt(@intFromPtr(vk_buffer)),
+                            .allocation = vma_alloc,
+                        } },
+                        .mapped_region = @as([*c]u8, @ptrCast(vma_info.pMappedData))[0..config.buffer_size],
+                    };
+                } else if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+                    @compileError("Metal staging buffer not implemented");
+                } else if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .dx12) {
+                    @compileError("Metal staging buffer not implemented");
+                }
+                //stage_buffers[i]
+
             }
             // zig fmt: off
-            return .{ 
+            return .{
+                .queue = queue,
                 .pool = pool, 
                 .cmd = cmd, 
-                .staging_buffer = staging_buffer, 
+                .staging_buffer = staging_buffer,
+                .temporary_buffers = .empty,
                 .backend = res: {
                     if (rhi.is_target_selected(.vk, renderer)) {
                         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
@@ -239,19 +241,17 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             // zig fmt: on
         }
 
-        pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.Device) !ResourceLoader {
+        pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.Device) !Self {
             var res = Self{
                 .allocator = allocator,
                 .device = device,
             };
-            for (config.max_sets) |i| {
-                res.upload_resource[i] = init_resource_copy_queue(renderer, &device.graphics_queue, device);
-                res.copy_resource[i] = init_resource_copy_queue(renderer, if (device.transfer_queue) |*t| t else &device.graphics_queues, device);
-            }
+            res.upload_resource = try init_resource_copy_queue(renderer, &device.graphics_queue, device);
+            res.copy_resource = try init_resource_copy_queue(renderer, if (device.transfer_queue) |*t| t else &device.graphics_queue, device);
             return res;
         }
 
-        pub fn flush_resource_update_vk(self: *Self, renderer: *rhi.Renderer, wait_semaphore_info: []rhi.vulkan.vk.SemaphoreSubmitInfo) struct { fence: rhi.vulkan.vk.Fence, semaphore: rhi.vulkan.vk.Semaphore } {
+        pub fn VKFlushResourceUpdate(self: *Self, renderer: *rhi.Renderer, wait_semaphore_info: []rhi.vulkan.vk.SemaphoreSubmitInfo) !struct { fence: rhi.vulkan.vk.Fence, semaphore: rhi.vulkan.vk.Semaphore, signaled: bool } {
             std.debug.assert(renderer.target_api() == .vk);
             self.resource_mutex.lock();
             defer self.resource_mutex.unlock();
@@ -259,19 +259,19 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             const group: *TransferCommandGroup = &self.upload_resource;
             const active_set = group.active_set;
             if (!self.upload_resource.is_recording) {
-                return .{ .fence = group.fence[active_set], .semaphore = group.backend.vk.semaphore[active_set] };
+                return .{ .fence = group.backend.vk.fences[active_set], .semaphore = group.backend.vk.semaphores[active_set], .signaled = false };
             }
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
-            group.cmd[group.active_set].end(renderer, self.device);
+            try group.cmd[group.active_set].end(renderer, self.device);
             const cmd_submit = [_]rhi.vulkan.vk.CommandBufferSubmitInfo{.{
                 .command_buffer = group.cmd[group.active_set].backend.vk.cmd,
                 .device_mask = 0,
             }};
 
             const signal_semaphore = [_]rhi.vulkan.vk.SemaphoreSubmitInfo{.{
-                .semaphore = group.backend.vk.semaphore[group.active_set],
+                .semaphore = group.backend.vk.semaphores[group.active_set],
                 .value = 0,
-                .stage_mask = .{ .transfer_queue = true },
+                .stage_mask = .{ .all_transfer_bit = true },
                 .device_index = 0,
             }};
 
@@ -280,15 +280,15 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                 .p_command_buffer_infos = cmd_submit[0..].ptr, 
                 .command_buffer_info_count = cmd_submit.len, 
                 .p_wait_semaphore_infos = wait_semaphore_info[0..].ptr, 
-                .wait_semaphore_info_count = wait_semaphore_info.len, 
+                .wait_semaphore_info_count = @intCast(wait_semaphore_info.len), 
                 .p_signal_semaphore_infos = signal_semaphore[0..].ptr, 
                 .signal_semaphore_info_count = signal_semaphore.len 
             }};
             // zig fmt: on
-            dkb.queueSubmit2(self.upload_resource.queue, 1, submit_info[0..].ptr, group.backend.backend.vk.fence[active_set]);
+            try dkb.queueSubmit2(self.upload_resource.queue.backend.vk.queue, 1, submit_info[0..].ptr, group.backend.vk.fences[active_set]);
             group.active_set = (group.active_set + 1) % config.max_sets;
             group.is_recording = false;
-            return .{ .fence = group.fence[active_set], .semaphore = group.backend.vk.semaphore[active_set] };
+            return .{ .fence = group.backend.vk.fences[active_set], .semaphore = group.backend.vk.semaphores[active_set], .signaled = true };
         }
 
         //pub fn flush(self: *Self, renderer: *rhi.Renderer, options: union {
@@ -416,7 +416,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         }
 
         pub fn end_copy_texture(self: *Self, renderer: *rhi.Renderer, transaction: *TextureTransaction) !void {
-            const format_props = rhi.format.get_props(transaction.format);
+            const format_props = rhi.format.GetProps(transaction.format);
             const row_block_num = transaction.row_pitch / format_props.stride;
             const buffer_row_length = row_block_num * format_props.block_width;
 
@@ -439,13 +439,10 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                         .depth = transaction.depth,
                     }, 
                     .image_subresource = .{ 
-                        .mip_level = transaction.mipOffset, 
+                        .mip_level = transaction.mip_offset, 
                         .base_array_layer = transaction.array_offset, 
                         .layer_count = 1, 
-                        .aspect_mask = switch (transaction.specialization) {
-                            .vk => |s| s.image_aspect,
-                            _ => rhi.vulkan.vk_format_to_image_aspect_flags(transaction.format)
-                        } 
+                        .aspect_mask = rhi.vulkan.VKImageAspectFlagsFromFormat(transaction.format)
                     } 
                 };
                 self.resource_mutex.lock();

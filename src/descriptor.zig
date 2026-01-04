@@ -1,5 +1,4 @@
 const rhi = @import("root.zig");
-const vulkan = @import("vulkan.zig");
 
 pub const Descriptor = @This();
 
@@ -8,10 +7,10 @@ image: *rhi.Image,
 buffer: *rhi.Buffer, 
 backend: union(rhi.Backend) {
     vk: rhi.wrapper_platform_type(.vk, struct {
-        type: vulkan.vk.DescriptorType,
+        type: rhi.vulkan.vk.DescriptorType,
         view: union {
-            image: vulkan.vk.DescriptorImageInfo,
-            buffer: vulkan.vk.DescriptorBufferInfo,
+            image: rhi.vulkan.vk.DescriptorImageInfo,
+            buffer: rhi.vulkan.vk.DescriptorBufferInfo,
         } 
     }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {
