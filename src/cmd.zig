@@ -150,7 +150,7 @@ pub const Pool = struct {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             try dkb.resetCommandPool(device.backend.vk.device, self.backend.vk.pool, .{});
             return;
-        } 
+        }
         unreachable;
     }
 
@@ -223,7 +223,7 @@ pub fn CommandRingBuffer(
             self.fence_index = 0;
         }
         pub fn get(self: *Self, renderer: *rhi.Renderer, num_cmds: usize) CommandRingElement {
-            if (rhi.is_target_selected(.vk, renderer)) {
+            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                 std.debug.assert(num_cmds <= options.cmd_per_pool);
                 std.debug.assert(num_cmds + self.cmd_index <= options.cmd_per_pool);
                 const result = CommandRingElement{ .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds], .pool = &self.pools[self.pool_index], .backend = .{ .vk = .{
@@ -237,7 +237,7 @@ pub fn CommandRingBuffer(
             unreachable;
         }
         pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, queue: *rhi.Queue) !Self {
-            if (rhi.is_target_selected(.vk, renderer)) {
+            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                 var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
                 var cmds: [options.pool_count][options.cmd_per_pool]rhi.Cmd = undefined;
                 var pools: [options.pool_count]rhi.Pool = undefined;
@@ -264,13 +264,13 @@ pub fn CommandRingBuffer(
                     .semaphores = semaphores,
                     .fences = fences,
                 } } };
-            } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+            } 
 
             unreachable; // should never reach here
         }
 
         pub fn deinit(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device) void {
-            if (rhi.is_target_selected(.vk, renderer)) {
+            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                 var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
                 for (0..options.pool_count) |pool_index| {
                     if (options.sync_primative) {
@@ -284,7 +284,9 @@ pub fn CommandRingBuffer(
                     }
                     dkb.destroyCommandPool(device.backend.vk.device, self.pools[pool_index].backend.vk.pool, null);
                 }
-            } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+                return;
+            }
+            unreachable;
         }
     };
 }
@@ -338,17 +340,16 @@ pub fn begin(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) !void {
         };
         try dkb.beginCommandBuffer(self.backend.vk.cmd, &begin_info);
         return;
-    } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+    } 
     unreachable;
 }
 
 pub fn end(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) !void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         try dkb.endCommandBuffer(self.backend.vk.cmd);
         return;
-    } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
-    unreachable;
+    } 
 }
 
 //pub fn resourceBarrier(self: *Cmd, allocator: std.mem.Allocator, renderer: *rhi.Renderer, options: struct {

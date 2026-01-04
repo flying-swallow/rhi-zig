@@ -15,14 +15,14 @@ pub const DefaultResourceConfig = ResourceConfig{
 };
 
 pub const BufferTransaction = struct {
-    target: rhi.Buffer,
+    target: *rhi.Buffer,
     offset: usize,
     size: usize,
 
     // begin mapping
-    mapped: rhi.Buffer.MappedMemoryRange,
+    mapped: rhi.Buffer.MappedMemoryRange = undefined,
 
-    internal: struct { mapped_region: rhi.Buffer.MappedMemoryRange },
+    //internal: struct { mapped_region: rhi.Buffer.MappedMemoryRange = .{} },
 };
 
 pub const TextureTransaction = struct {
@@ -118,25 +118,53 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         }
 
         pub fn allocate_temporary_buffer(self: *Self, renderer: *rhi.Renderer, group: *TransferCommandGroup, size: usize) !rhi.Buffer.MappedMemoryRange {
-            const temporary_buffer: rhi.Buffer = if (rhi.is_target_selected(.vk, renderer)) result: {
-                var res: rhi.Buffer = undefined;
-                const allocation_info = vma.c.VmaAllocationCreateInfo{
-                    .usage = vma.c.VMA_MEMORY_USAGE_AUTO,
-                    .flags = vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT | vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-                };
-                const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ .size = size, .usage = .{
-                    .transfer_src_bit = true,
-                    .transfer_dst_bit = true,
-                } };
-                const vma_info = vma.c.VmaAllocationInfo{};
-                try rhi.vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateBuffer(self.device.backend.vk.vma_allocator, &stage_buffer_create_info, &allocation_info, &res.backend.vk.buffer, &res.backend.vk.allocation, &vma_info)));
-                res.mapped_region = @as([*c]u8, @ptrCast(vma_info.pMappedData))[0..size];
-                break :result res;
-            } else if (rhi.is_target_selected(.dx12, renderer)) {
-                @compileError("Metal staging buffer not implemented");
-            } else if (rhi.is_target_selected(.mtl, renderer)) {
-                @compileError("Metal staging buffer not implemented");
+            const temporary_buffer: rhi.Buffer = result: {
+                if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+                    const allocation_info = vma.c.VmaAllocationCreateInfo{
+                        .usage = vma.c.VMA_MEMORY_USAGE_AUTO,
+                        .flags = vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT | vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                    };
+                    const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ .size = size, .sharing_mode = .exclusive, .usage = .{
+                        .transfer_src_bit = true,
+                        .transfer_dst_bit = true,
+                    } };
+                    var vma_info = vma.c.VmaAllocationInfo{};
+                    var vk_buffer: vma.c.VkBuffer = undefined;
+                    var vma_alloc: vma.c.VmaAllocation = undefined;
+                    try vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateBuffer(self.device.backend.vk.vma_allocator, @ptrCast(&stage_buffer_create_info), &allocation_info, &vk_buffer, &vma_alloc, &vma_info)));
+                    break :result .{
+                        .backend = .{ .vk = .{
+                            .buffer = @enumFromInt(@intFromPtr(vk_buffer)),
+                            .allocation = vma_alloc,
+                        } },
+                        .mapped_region = @as([*c]u8, @ptrCast(vma_info.pMappedData))[0..size],
+                    };
+                } 
+                unreachable;
             };
+
+            //const temporary_buffer: rhi.Buffer = if (rhi.is_target_selected(.vk, renderer)) result: {
+            //    var res: rhi.Buffer = undefined;
+            //    const allocation_info = vma.c.VmaAllocationCreateInfo{
+            //        .usage = vma.c.VMA_MEMORY_USAGE_AUTO,
+            //        .flags = vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT | vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+            //    };
+            //    const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ 
+            //        .size = size,
+            //        .sharing_mode = .exclusive,
+            //        .usage = .{
+            //            .transfer_src_bit = true,
+            //            .transfer_dst_bit = true,
+            //        } };
+            //    const vma_info = vma.c.VmaAllocationInfo{};
+            //    try rhi.vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateBuffer(self.device.backend.vk.vma_allocator, &stage_buffer_create_info, &allocation_info, &res.backend.vk.buffer, &res.backend.vk.allocation, &vma_info)));
+            //    res.mapped_region = @as([*c]u8, @ptrCast(vma_info.pMappedData))[0..size];
+            //    break :result res;
+            //} else if (rhi.is_target_selected(.dx12, renderer)) {
+            //    @compileError("Metal staging buffer not implemented");
+            //} else if (rhi.is_target_selected(.mtl, renderer)) {
+            //    @compileError("Metal staging buffer not implemented");
+            //};
             try group.temporary_buffers.append(self.allocator, temporary_buffer);
 
             return temporary_buffer.get_mapped_region(0, size);
@@ -147,7 +175,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             const staged_offset = std.mem.alignForward(usize, group.staging_buffer_offset, alignment);
             if ((staged_offset < config.buffer_size) and memory_request_size <= (config.buffer_size - staged_offset)) {
                 group.staging_buffer_offset = staged_offset + memory_request_size;
-                return try group.staging_buffer[group.active_set].get_mapped_region(staged_offset, memory_request_size);
+                return group.staging_buffer[group.active_set].get_mapped_region(staged_offset, memory_request_size) catch unreachable;
             }
             return null;
         }
@@ -203,10 +231,8 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                         } },
                         .mapped_region = @as([*c]u8, @ptrCast(vma_info.pMappedData))[0..config.buffer_size],
                     };
-                } else if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
-                    @compileError("Metal staging buffer not implemented");
-                } else if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .dx12) {
-                    @compileError("Metal staging buffer not implemented");
+                } else {
+                    std.debug.panic("TODO", .{});
                 }
                 //stage_buffers[i]
 
@@ -364,15 +390,15 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                     if (allocate_from_stage_buffer(&self.upload_resource, transaction.size, 4)) |s| {
                         break :res s;
                     } else {
-                        break :res self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size, 4);
+                        break :res try self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size);
                     }
                 };
 
-                if (allocate_from_stage_buffer(&self.upload_resource, transaction.size, 4)) |s| {
-                    transaction.mapped = s;
-                } else {
-                    transaction.mapped = self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size, 4);
-                }
+                //if (allocate_from_stage_buffer(&self.upload_resource, transaction.size, 4)) |s| {
+                //    transaction.mapped = s;
+                //} else {
+                //    transaction.mapped = self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size, 4);
+                //}
             } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
         }
 

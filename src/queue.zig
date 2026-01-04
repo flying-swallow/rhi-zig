@@ -18,7 +18,7 @@ pub fn submit(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Device, option
     dx12: ?rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: ?rhi.wrapper_platform_type(.mtl, struct {}),
 }) void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         std.debug.assert(options.vk != null);
         var submit_infos = rhi.vulkan.vk.SubmitInfo{
             .s_type = .submit_info,
@@ -31,12 +31,16 @@ pub fn submit(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Device, option
             .p_signal_semaphores = if (options.vk.?.signal_semaphores.len > 0) &options.vk.?.signal_semaphores[0] else null,
         };
         _ = try device.backend.vk.dkb.queueSubmit(self.backend.vk.queue, 1, &submit_infos, null);
+        return;
     }
+    unreachable;
 }
 
 pub fn wait_queue_idle(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Device) !void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         _ = try dkb.queueWaitIdle(self.backend.vk.queue);
+        return;
     }
+    unreachable;
 }

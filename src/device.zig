@@ -303,7 +303,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
 }
 
 pub fn deinit(self: *Device, renderer: *rhi.Renderer) void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         vma.c.vmaDestroyAllocator(@ptrCast(self.backend.vk.vma_allocator));
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.backend.vk.dkb;
         dkb.destroyDevice(self.backend.vk.device, null);

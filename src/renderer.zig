@@ -17,6 +17,14 @@ backend: union(rhi.Backend) {
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },
 
+pub fn apiString(self: *Renderer) []const u8 {
+    return switch (self.backend) {
+        .vk => "Vulkan",
+        .dx12 => "DirectX 12",
+        .mtl => "Metal",
+    };
+}
+
 pub fn target_api(self: *Renderer) rhi.Backend {
     if (self.backend == .vk and comptime rhi.platform_has_api(.vk)) {
         return .vk;

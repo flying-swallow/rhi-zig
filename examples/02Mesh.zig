@@ -240,19 +240,12 @@ fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(AppContext) {
                     .window = @intCast(sdl_application.sdl.SDL_GetNumberProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)),
                 } };
             } else if (std.mem.eql(u8, std.mem.sliceTo(sdl_application.sdl.SDL_GetCurrentVideoDriver(), 0), "wayland")) {
-                break :p rhi.WindowHandle { 
-                    .wayland = .{ 
-                        .display = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null).?, 
-                        .surface = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null).?, 
-                        .shell_surface = null 
-                    } 
-                };
+                break :p rhi.WindowHandle{ .wayland = .{ .display = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null).?, .surface = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null).?, .shell_surface = null } };
             }
         } else if (builtin.os.tag == .macos or builtin.os.tag == .ios) {}
         return error.SdlError;
     };
 
-    
     app.renderer = try rhi.Renderer.init(allocator, .{
         .vk = .{ .app_name = "GraphicsKernel", .enable_validation_layer = true },
     });
@@ -266,7 +259,7 @@ fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(AppContext) {
     app.graphics_cmd_ring = try CmdRingBuffer.init(&app.renderer, &app.device, &app.device.graphics_queue);
     app.dirty_resize = false;
     app.resource_loader = try ResourceLoader.init(allocator, &app.renderer, &app.device);
-    
+
     app.cube_vertex_buffer = try .init_general(&app.renderer, &app.device, .{
         .size = @sizeOf(f32) * cube_mesh.len,
         .usage = .{ .vertex_buffer = true },
@@ -275,6 +268,17 @@ fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(AppContext) {
         .size = @sizeOf(u16) * cube_index.len,
         .usage = .{ .index_buffer = true },
     });
+    {
+        var transaction: rhi.resource_loader.BufferTransaction = .{
+            .target = &app.cube_vertex_buffer,
+            .offset = 0,
+            .size = 0
+        }; 
+        try app.resource_loader.begin_copy_buffer(&app.renderer, &transaction);
+        @memcpy(transaction.mapped.memory_range[0..cube_mesh.len], cube_mesh[0..]);
+
+    }
+
 
     return .{
         .cntx = app,
