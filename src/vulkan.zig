@@ -81,7 +81,7 @@ pub fn add_next(current: anytype, next: anytype) void {
     next.p_next = tmp;
 }
 
-pub fn debug_utils_messenger(messageSeverity: vk.DebugUtilsMessageSeverityFlagsEXT, _: vk.DebugUtilsMessageTypeFlagsEXT, callbackData: ?*const vk.DebugUtilsMessengerCallbackDataEXT, _: ?*anyopaque) callconv(vk.vulkan_call_conv) vk.Bool32 {
+pub fn VKDebugMessengerUtility(messageSeverity: vk.DebugUtilsMessageSeverityFlagsEXT, _: vk.DebugUtilsMessageTypeFlagsEXT, callbackData: ?*const vk.DebugUtilsMessengerCallbackDataEXT, _: ?*anyopaque) callconv(vk.vulkan_call_conv) vk.Bool32 {
     if (messageSeverity.error_bit_ext) {
         std.debug.print("VK ERROR: {s}\n", .{callbackData.?.p_message.?[0..]});
     }

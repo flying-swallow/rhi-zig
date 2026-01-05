@@ -100,25 +100,25 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             if (!copy_set.is_recording) {
                 if (rhi.is_target_selected(.vk, renderer)) {
                     var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
-                    if (try dkb.getFenceStatus(self.device.backend.vk.device) == .not_ready) {
-                        const fences = [_]rhi.vulkan.vk.Fence{copy_set.backend.vk.fences[copy_set.active_set]};
-                        try dkb.waitForFences(self.device.backend.vk.device, 1, fences[0..].ptr, .true, std.math.maxInt(u64));
+                    const fences = [_]rhi.vulkan.vk.Fence{copy_set.backend.vk.fences[copy_set.active_set]};
+                    if (try dkb.getFenceStatus(self.device.backend.vk.device, fences[0]) == .not_ready) {
+                        _ = dkb.waitForFences(self.device.backend.vk.device, 1, fences[0..].ptr, .true, std.math.maxInt(u64)) catch unreachable;
                     }
                 }
                 copy_set.staging_buffer_offset = 0;
                 for (copy_set.temporary_buffers.items) |buf| {
-                    vma.c.vmaDestroyBuffer(self.device.backend.vk.vma_allocator, buf.backend.vk.buffer, buf.backend.vk.allocation);
+                    vma.c.vmaDestroyBuffer(self.device.backend.vk.vma_allocator, @ptrFromInt(@intFromEnum(buf.backend.vk.buffer)), buf.backend.vk.allocation);
                 }
                 copy_set.temporary_buffers.clearRetainingCapacity();
-                copy_set.pool[copy_set.active_set].reset(self.device, self.device.graphics_queue);
-                copy_set.cmd[copy_set.active_set].begin(renderer, self.device);
+                try copy_set.pool[copy_set.active_set].reset(renderer, self.device);
+                try copy_set.cmd[copy_set.active_set].begin(renderer, self.device);
                 copy_set.is_recording = true;
             }
             return copy_set.cmd[copy_set.active_set];
         }
 
         pub fn allocate_temporary_buffer(self: *Self, renderer: *rhi.Renderer, group: *TransferCommandGroup, size: usize) !rhi.Buffer.MappedMemoryRange {
-            const temporary_buffer: rhi.Buffer = result: {
+            var temporary_buffer: rhi.Buffer = result: {
                 if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                     const allocation_info = vma.c.VmaAllocationCreateInfo{
                         .usage = vma.c.VMA_MEMORY_USAGE_AUTO,
@@ -139,7 +139,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                         } },
                         .mapped_region = @as([*c]u8, @ptrCast(vma_info.pMappedData))[0..size],
                     };
-                } 
+                }
                 unreachable;
             };
 
@@ -149,7 +149,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             //        .usage = vma.c.VMA_MEMORY_USAGE_AUTO,
             //        .flags = vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT | vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
             //    };
-            //    const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ 
+            //    const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{
             //        .size = size,
             //        .sharing_mode = .exclusive,
             //        .usage = .{
@@ -311,6 +311,12 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                 .signal_semaphore_info_count = signal_semaphore.len 
             }};
             // zig fmt: on
+
+
+            std.debug.assert(try dkb.getFenceStatus(self.device.backend.vk.device, group.backend.vk.fences[group.active_set]) == .success);
+            const reset_fence = [_]rhi.vulkan.vk.Fence{group.backend.vk.fences[group.active_set]};
+            _ = try dkb.resetFences(self.device.backend.vk.device, reset_fence.len, reset_fence[0..].ptr);
+
             try dkb.queueSubmit2(self.upload_resource.queue.backend.vk.queue, 1, submit_info[0..].ptr, group.backend.vk.fences[active_set]);
             group.active_set = (group.active_set + 1) % config.max_sets;
             group.is_recording = false;
@@ -383,7 +389,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         //}
 
         pub fn begin_copy_buffer(self: *Self, renderer: *rhi.Renderer, transaction: *BufferTransaction) !void {
-            if (rhi.is_target_selected(.vk, renderer)) {
+            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                 self.resource_mutex.lock();
                 defer self.resource_mutex.unlock();
                 transaction.mapped = res: {
@@ -393,26 +399,22 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                         break :res try self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size);
                     }
                 };
-
-                //if (allocate_from_stage_buffer(&self.upload_resource, transaction.size, 4)) |s| {
-                //    transaction.mapped = s;
-                //} else {
-                //    transaction.mapped = self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size, 4);
-                //}
-            } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+                return;
+            }
+            unreachable;
         }
 
         pub fn end_copy_buffer(self: *Self, renderer: *rhi.Renderer, transaction: *BufferTransaction) !void {
-            if (rhi.is_target_selected(.vk, renderer)) {
-                var buffer_copy = rhi.vulkan.vk.BufferCopy{
-                    .srcOffset = transaction.mapped.offset,
-                    .dstOffset = transaction.offset,
+            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+                var buffer_copy = [_]rhi.vulkan.vk.BufferCopy{.{
+                    .src_offset = transaction.mapped.offset,
+                    .dst_offset = transaction.offset,
                     .size = transaction.size,
-                };
+                }};
                 self.resource_mutex.lock();
                 defer self.resource_mutex.unlock();
                 var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
-                var cmd = self.acquire_cmd(renderer, &self.upload_resource);
+                var cmd = try self.acquire_cmd(renderer, &self.upload_resource);
                 dkb.cmdCopyBuffer(
                     cmd.backend.vk.cmd,
                     transaction.mapped.buffer.backend.vk.buffer,
@@ -420,7 +422,9 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                     1,
                     &buffer_copy,
                 );
-            } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+                return;
+            }
+            unreachable;
         }
 
         pub fn begin_copy_texture(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device, transaction: *TextureTransaction) !void {
@@ -428,7 +432,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             const aligned_slice_pitch = std.mem.alignForward(usize, transaction.slice_num * aligned_row_pitch, device.adapter.upload_buffer_texture_slice_alignment);
             transaction.align_row_pitch = @as(u32, aligned_row_pitch);
             transaction.align_slice_pitch = @as(u32, aligned_slice_pitch);
-            if (rhi.is_target_selected(.vk, renderer)) {
+            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                 self.resource_mutex.lock();
                 defer self.resource_mutex.unlock();
                 transaction.mapped = res: {
@@ -438,7 +442,9 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                         break :res self.allocate_temporary_buffer(renderer, &self.upload_resource, transaction.size, 4);
                     }
                 };
-            } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+                return;
+            }
+            unreachable;
         }
 
         pub fn end_copy_texture(self: *Self, renderer: *rhi.Renderer, transaction: *TextureTransaction) !void {
@@ -448,7 +454,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
 
             const slice_row_num = transaction.align_slice_pitch / transaction.row_pitch;
             const buffer_image_height = slice_row_num * format_props.block_width;
-            if (rhi.is_target_selected(.vk, renderer)) {
+            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                 // zig fmt: off
                 var image_copy = rhi.vulkan.vk.BufferImageCopy{ 
                     .buffer_offset = transaction.mapped.offset, 
@@ -483,8 +489,9 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                     &image_copy
                 );
                 // zig fmt: on
-
-            } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+                return;
+            } 
+            unreachable;
         }
     };
 }

@@ -192,9 +192,14 @@ fn iterate_handler(cntx: *AppContext) anyerror!sdl_application.sdl.SDL_AppResult
                 .device_index = 0,
             }};
 
-            // zig fmt off
-            var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ .p_command_buffer_infos = cmd_submit[0..].ptr, .command_buffer_info_count = cmd_submit.len, .p_wait_semaphore_infos = wait_semaphore_info.items[0..].ptr, .wait_semaphore_info_count = @intCast(wait_semaphore_info.items.len), .p_signal_semaphore_infos = semaphore_info[0..].ptr, .signal_semaphore_info_count = semaphore_info.len }};
-            // zig fmt on
+            var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ 
+                .p_command_buffer_infos = cmd_submit[0..].ptr, 
+                .command_buffer_info_count = cmd_submit.len, 
+                .p_wait_semaphore_infos = wait_semaphore_info.items[0..].ptr, 
+                .wait_semaphore_info_count = @intCast(wait_semaphore_info.items.len), 
+                .p_signal_semaphore_infos = semaphore_info[0..].ptr, 
+                .signal_semaphore_info_count = semaphore_info.len 
+            }};
             std.debug.assert(try dkb.getFenceStatus(cntx.device.backend.vk.device, ring_element.backend.vk.fence) == .success);
             const reset_fence = [_]rhi.vulkan.vk.Fence{ring_element.backend.vk.fence};
             _ = try dkb.resetFences(cntx.device.backend.vk.device, reset_fence.len, reset_fence[0..].ptr);
@@ -260,25 +265,28 @@ fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(AppContext) {
     app.dirty_resize = false;
     app.resource_loader = try ResourceLoader.init(allocator, &app.renderer, &app.device);
 
-    app.cube_vertex_buffer = try .init_general(&app.renderer, &app.device, .{
-        .size = @sizeOf(f32) * cube_mesh.len,
-        .usage = .{ .vertex_buffer = true },
-    });
-    app.cube_index_buffer = try .init_general(&app.renderer, &app.device, .{
-        .size = @sizeOf(u16) * cube_index.len,
-        .usage = .{ .index_buffer = true },
-    });
     {
-        var transaction: rhi.resource_loader.BufferTransaction = .{
-            .target = &app.cube_vertex_buffer,
-            .offset = 0,
-            .size = 0
-        }; 
+        var cube_bytes = std.mem.asBytes(&cube_mesh);
+        var transaction: rhi.resource_loader.BufferTransaction = .{ .target = &app.cube_vertex_buffer, .offset = 0, .size = cube_bytes.len };
+        app.cube_vertex_buffer = try .init_general(&app.renderer, &app.device, .{
+            .size = cube_bytes.len,
+            .usage = .{ .vertex_buffer = true },
+        });
         try app.resource_loader.begin_copy_buffer(&app.renderer, &transaction);
-        @memcpy(transaction.mapped.memory_range[0..cube_mesh.len], cube_mesh[0..]);
-
+        @memcpy(transaction.mapped.memory_range[0..cube_bytes.len], cube_bytes[0..]);
+        try app.resource_loader.end_copy_buffer(&app.renderer, &transaction);
     }
-
+    {
+        var index_bytes = std.mem.asBytes(&cube_index);
+        app.cube_index_buffer = try .init_general(&app.renderer, &app.device, .{
+            .size = index_bytes.len,
+            .usage = .{ .index_buffer = true },
+        });
+        var transation: rhi.resource_loader.BufferTransaction = .{ .target = &app.cube_index_buffer, .offset = 0, .size = index_bytes.len };
+        try app.resource_loader.begin_copy_buffer(&app.renderer, &transation);
+        @memcpy(transation.mapped.memory_range[0..index_bytes.len], index_bytes[0..]);
+        try app.resource_loader.end_copy_buffer(&app.renderer, &transation);
+    }
 
     return .{
         .cntx = app,
