@@ -1,13 +1,16 @@
 const std = @import("std");
 const rhi = @import("rhi");
 const builtin = @import("builtin");
-const sdl_application = @import("./sdl_application.zig");
+const sdl_app = @import("./sdl_app.zig");
 
 pub const ResourceLoader = rhi.ResourceLoader(.{ .max_sets = 2, .buffer_size = 8 * 1024 * 1024 });
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = 4, .sync_primative = true });
-var allocator: std.mem.Allocator = undefined;
-pub const AppContext = struct {
-    window: *sdl_application.sdl.SDL_Window = undefined,
+
+pub const Context = struct {
+    allocator: std.mem.Allocator = undefined,
+    frame_heap: std.heap.ArenaAllocator = undefined,
+
+    window: *sdl_app.sdl.SDL_Window = undefined,
     renderer: rhi.Renderer = undefined,
     swapchain: rhi.Swapchain = undefined,
     device: rhi.Device = undefined,
@@ -40,17 +43,18 @@ pub const cube_mesh = [_]f32{
     0.5, 0.5, 0.5, // V7
 };
 
-fn iterate_handler(cntx: *AppContext) anyerror!sdl_application.sdl.SDL_AppResult {
+fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.sdl.SDL_AppResult {
+    var cntx = &app_context.inner;
     while (cntx.timekeeper.consume()) {}
     // draw
     {
         if (@atomicRmw(bool, &cntx.dirty_resize, .Xchg, false, .monotonic) == true) {
             var w: c_int = 0;
             var h: c_int = 0;
-            if (sdl_application.sdl.SDL_GetWindowSize(cntx.window, &w, &h)) {
+            if (sdl_app.sdl.SDL_GetWindowSize(cntx.window, &w, &h)) {
                 _ = try cntx.swapchain.resize(&cntx.renderer, &cntx.device, @intCast(w), @intCast(h));
             } else {
-                std.log.err("{s}", .{sdl_application.sdl.SDL_GetError()});
+                std.log.err("{s}", .{sdl_app.sdl.SDL_GetError()});
             }
         }
 
@@ -192,14 +196,7 @@ fn iterate_handler(cntx: *AppContext) anyerror!sdl_application.sdl.SDL_AppResult
                 .device_index = 0,
             }};
 
-            var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ 
-                .p_command_buffer_infos = cmd_submit[0..].ptr, 
-                .command_buffer_info_count = cmd_submit.len, 
-                .p_wait_semaphore_infos = wait_semaphore_info.items[0..].ptr, 
-                .wait_semaphore_info_count = @intCast(wait_semaphore_info.items.len), 
-                .p_signal_semaphore_infos = semaphore_info[0..].ptr, 
-                .signal_semaphore_info_count = semaphore_info.len 
-            }};
+            var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ .p_command_buffer_infos = cmd_submit[0..].ptr, .command_buffer_info_count = cmd_submit.len, .p_wait_semaphore_infos = wait_semaphore_info.items[0..].ptr, .wait_semaphore_info_count = @intCast(wait_semaphore_info.items.len), .p_signal_semaphore_infos = semaphore_info[0..].ptr, .signal_semaphore_info_count = semaphore_info.len }};
             std.debug.assert(try dkb.getFenceStatus(cntx.device.backend.vk.device, ring_element.backend.vk.fence) == .success);
             const reset_fence = [_]rhi.vulkan.vk.Fence{ring_element.backend.vk.fence};
             _ = try dkb.resetFences(cntx.device.backend.vk.device, reset_fence.len, reset_fence[0..].ptr);
@@ -218,83 +215,79 @@ fn iterate_handler(cntx: *AppContext) anyerror!sdl_application.sdl.SDL_AppResult
             _ = try dkb.queuePresentKHR(cntx.device.graphics_queue.backend.vk.queue, &present_info);
         }
     }
-    cntx.timekeeper.produce(sdl_application.sdl.SDL_GetPerformanceCounter());
-    return sdl_application.sdl.SDL_APP_CONTINUE;
+    cntx.timekeeper.produce(sdl_app.sdl.SDL_GetPerformanceCounter());
+    return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
-fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(AppContext) {
+fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror!sdl_app.InitResult(Context) {
     _ = argv;
-    if (sdl_application.sdl.SDL_SetAppMetadata("02-Mesh", "0.0.0", "mesh") == false) {
+    if (sdl_app.sdl.SDL_SetAppMetadata("02-Mesh", "0.0.0", "mesh") == false) {
         return error.SetAppMetadataFailed;
     }
-    if (sdl_application.sdl.SDL_Init(sdl_application.sdl.SDL_INIT_VIDEO) == false) {
+    if (sdl_app.sdl.SDL_Init(sdl_app.sdl.SDL_INIT_VIDEO) == false) {
         return error.SDLInitFailed;
     }
-    const app = try allocator.create(AppContext);
-    errdefer allocator.destroy(app);
 
-    const window = sdl_application.sdl.SDL_CreateWindow("02-mesh", 640, 480, sdl_application.sdl.SDL_WINDOW_RESIZABLE);
+    const window = sdl_app.sdl.SDL_CreateWindow("02-mesh", 640, 480, sdl_app.sdl.SDL_WINDOW_RESIZABLE);
     if (window == null) return error.CreateWindowFailed;
-    errdefer sdl_application.sdl.SDL_DestroyWindow(window);
+    errdefer sdl_app.sdl.SDL_DestroyWindow(window);
 
     const window_handle: rhi.WindowHandle = p: {
         if (builtin.os.tag == .windows) {} else if (builtin.os.tag == .linux) {
-            if (std.mem.eql(u8, std.mem.sliceTo(sdl_application.sdl.SDL_GetCurrentVideoDriver(), 0), "x11")) {
+            if (std.mem.eql(u8, std.mem.sliceTo(sdl_app.sdl.SDL_GetCurrentVideoDriver(), 0), "x11")) {
                 break :p rhi.WindowHandle{ .x11 = .{
-                    .display = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null).?,
-                    .window = @intCast(sdl_application.sdl.SDL_GetNumberProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)),
+                    .display = sdl_app.sdl.SDL_GetPointerProperty(sdl_app.sdl.SDL_GetWindowProperties(window), sdl_app.sdl.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null).?,
+                    .window = @intCast(sdl_app.sdl.SDL_GetNumberProperty(sdl_app.sdl.SDL_GetWindowProperties(window), sdl_app.sdl.SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)),
                 } };
-            } else if (std.mem.eql(u8, std.mem.sliceTo(sdl_application.sdl.SDL_GetCurrentVideoDriver(), 0), "wayland")) {
-                break :p rhi.WindowHandle{ .wayland = .{ .display = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null).?, .surface = sdl_application.sdl.SDL_GetPointerProperty(sdl_application.sdl.SDL_GetWindowProperties(window), sdl_application.sdl.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null).?, .shell_surface = null } };
+            } else if (std.mem.eql(u8, std.mem.sliceTo(sdl_app.sdl.SDL_GetCurrentVideoDriver(), 0), "wayland")) {
+                break :p rhi.WindowHandle{ .wayland = .{ .display = sdl_app.sdl.SDL_GetPointerProperty(sdl_app.sdl.SDL_GetWindowProperties(window), sdl_app.sdl.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null).?, .surface = sdl_app.sdl.SDL_GetPointerProperty(sdl_app.sdl.SDL_GetWindowProperties(window), sdl_app.sdl.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null).?, .shell_surface = null } };
             }
         } else if (builtin.os.tag == .macos or builtin.os.tag == .ios) {}
         return error.SdlError;
     };
 
-    app.renderer = try rhi.Renderer.init(allocator, .{
+    var cntx: *Context= &app_context.inner;
+
+    cntx.renderer = try rhi.Renderer.init(cntx.gpa, .{
         .vk = .{ .app_name = "GraphicsKernel", .enable_validation_layer = true },
     });
-    var adapters = try rhi.PhysicalAdapter.enumerate_adapters(allocator, &app.renderer);
-    defer adapters.deinit(allocator);
+    var adapters = try rhi.PhysicalAdapter.enumerate_adapters(cntx.gpa, &cntx.renderer);
+    defer adapters.deinit(cntx.gpa);
 
     const selected_adapter_index = rhi.PhysicalAdapter.default_select_adapter(adapters.items[0..]);
-    app.device = try rhi.Device.init(allocator, &app.renderer, &adapters.items[selected_adapter_index]);
-    app.swapchain = try rhi.Swapchain.init(allocator, &app.renderer, &app.device, 640, 480, &app.device.graphics_queue, window_handle, .{});
-    app.timekeeper = .{ .tocks_per_s = sdl_application.sdl.SDL_GetPerformanceFrequency() };
-    app.graphics_cmd_ring = try CmdRingBuffer.init(&app.renderer, &app.device, &app.device.graphics_queue);
-    app.dirty_resize = false;
-    app.resource_loader = try ResourceLoader.init(allocator, &app.renderer, &app.device);
+    cntx.device = try rhi.Device.init(app_context.gpa, &cntx.renderer, &adapters.items[selected_adapter_index]);
+    cntx.swapchain = try rhi.Swapchain.init(app_context.gpa, &cntx.renderer, &cntx.device, 640, 480, &cntx.device.graphics_queue, window_handle, .{});
+    cntx.timekeeper = .{ .tocks_per_s = sdl_app.sdl.SDL_GetPerformanceFrequency() };
+    cntx.graphics_cmd_ring = try CmdRingBuffer.init(&cntx.renderer, &cntx.device, &cntx.device.graphics_queue);
+    cntx.dirty_resize = false;
+    cntx.resource_loader = try ResourceLoader.init(app_context.gpa, &cntx.renderer, &cntx.device);
 
     {
         var cube_bytes = std.mem.asBytes(&cube_mesh);
-        var transaction: rhi.resource_loader.BufferTransaction = .{ .target = &app.cube_vertex_buffer, .offset = 0, .size = cube_bytes.len };
-        app.cube_vertex_buffer = try .init_general(&app.renderer, &app.device, .{
+        var transaction: rhi.resource_loader.BufferTransaction = .{ .target = &cntx.cube_vertex_buffer, .offset = 0, .size = cube_bytes.len };
+        cntx.cube_vertex_buffer = try .init_general(&cntx.renderer, &cntx.device, .{
             .size = cube_bytes.len,
             .usage = .{ .vertex_buffer = true },
         });
-        try app.resource_loader.begin_copy_buffer(&app.renderer, &transaction);
+        try cntx.resource_loader.begin_copy_buffer(&cntx.renderer, &transaction);
         @memcpy(transaction.mapped.memory_range[0..cube_bytes.len], cube_bytes[0..]);
-        try app.resource_loader.end_copy_buffer(&app.renderer, &transaction);
+        try cntx.resource_loader.end_copy_buffer(&cntx.renderer, &transaction);
     }
     {
         var index_bytes = std.mem.asBytes(&cube_index);
-        app.cube_index_buffer = try .init_general(&app.renderer, &app.device, .{
+        cntx.cube_index_buffer = try .init_general(&cntx.renderer, &cntx.device, .{
             .size = index_bytes.len,
             .usage = .{ .index_buffer = true },
         });
-        var transation: rhi.resource_loader.BufferTransaction = .{ .target = &app.cube_index_buffer, .offset = 0, .size = index_bytes.len };
-        try app.resource_loader.begin_copy_buffer(&app.renderer, &transation);
+        var transation: rhi.resource_loader.BufferTransaction = .{ .target = &cntx.cube_index_buffer, .offset = 0, .size = index_bytes.len };
+        try cntx.resource_loader.begin_copy_buffer(&cntx.renderer, &transation);
         @memcpy(transation.mapped.memory_range[0..index_bytes.len], index_bytes[0..]);
-        try app.resource_loader.end_copy_buffer(&app.renderer, &transation);
+        try cntx.resource_loader.end_copy_buffer(&cntx.renderer, &transation);
     }
-
-    return .{
-        .cntx = app,
-        .result = sdl_application.sdl.SDL_APP_CONTINUE,
-    };
+    return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
-fn app_quit(cntx: *AppContext, result: sdl_application.sdl.SDL_AppResult) void {
+fn app_quit(cntx: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_AppResult) void {
     cntx.device.graphics_queue.wait_queue_idle(&cntx.renderer, &cntx.device) catch |err| {
         std.log.err("Failed to wait graphics queue idle: {}", .{err});
     };
@@ -304,34 +297,27 @@ fn app_quit(cntx: *AppContext, result: sdl_application.sdl.SDL_AppResult) void {
     cntx.device.deinit(&cntx.renderer);
     cntx.renderer.deinit();
 
-    allocator.destroy(cntx);
     std.debug.print("App quit called with result: {any}\n", .{result});
 }
 
-fn app_event(cntx: *AppContext, event: *sdl_application.sdl.SDL_Event) anyerror!sdl_application.sdl.SDL_AppResult {
+fn app_event(cntx: *sdl_app.AppContext(Context), event: *sdl_app.sdl.SDL_Event) anyerror!sdl_app.sdl.SDL_AppResult {
     switch (event.type) {
-        sdl_application.sdl.SDL_EVENT_QUIT => {
-            return sdl_application.sdl.SDL_APP_SUCCESS;
+        sdl_app.sdl.SDL_EVENT_QUIT => {
+            return sdl_app.sdl.SDL_APP_SUCCESS;
         },
-        sdl_application.sdl.SDL_EVENT_WINDOW_RESIZED => {
+        sdl_app.sdl.SDL_EVENT_WINDOW_RESIZED => {
             @atomicStore(bool, &cntx.dirty_resize, true, .monotonic);
         },
         else => {},
     }
-    return sdl_application.sdl.SDL_APP_CONTINUE;
+    return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .thread_safe = true,
-    }){};
-    defer _ = gpa.deinit();
-    allocator = gpa.allocator();
-
-    _ = sdl_application.SdlApplicaton(AppContext, .{
+pub fn main(init: std.process.Init) !void {
+    _ = sdl_app.SdlApplicaton(Context, .{
         .iterate_handler = iterate_handler,
         .app_init = app_init,
         .app_event = app_event,
         .app_quit = app_quit,
-    }).exec();
+    }).exec(init);
 }
