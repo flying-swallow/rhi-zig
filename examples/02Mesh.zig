@@ -219,7 +219,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
-fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror!sdl_app.InitResult(Context) {
+fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror!sdl_app.sdl.SDL_AppResult {
     _ = argv;
     if (sdl_app.sdl.SDL_SetAppMetadata("02-Mesh", "0.0.0", "mesh") == false) {
         return error.SetAppMetadataFailed;
@@ -245,8 +245,7 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
         } else if (builtin.os.tag == .macos or builtin.os.tag == .ios) {}
         return error.SdlError;
     };
-
-    var cntx: *Context= &app_context.inner;
+    var cntx: *Context = &app_context.inner;
 
     cntx.renderer = try rhi.Renderer.init(cntx.gpa, .{
         .vk = .{ .app_name = "GraphicsKernel", .enable_validation_layer = true },
@@ -287,7 +286,8 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
     return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
-fn app_quit(cntx: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_AppResult) void {
+fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_AppResult) void {
+    var cntx: *Context = &app_context.inner;
     cntx.device.graphics_queue.wait_queue_idle(&cntx.renderer, &cntx.device) catch |err| {
         std.log.err("Failed to wait graphics queue idle: {}", .{err});
     };
@@ -300,13 +300,13 @@ fn app_quit(cntx: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_AppResul
     std.debug.print("App quit called with result: {any}\n", .{result});
 }
 
-fn app_event(cntx: *sdl_app.AppContext(Context), event: *sdl_app.sdl.SDL_Event) anyerror!sdl_app.sdl.SDL_AppResult {
+fn app_event(app_context: *sdl_app.AppContext(Context), event: *sdl_app.sdl.SDL_Event) anyerror!sdl_app.sdl.SDL_AppResult {
     switch (event.type) {
         sdl_app.sdl.SDL_EVENT_QUIT => {
             return sdl_app.sdl.SDL_APP_SUCCESS;
         },
         sdl_app.sdl.SDL_EVENT_WINDOW_RESIZED => {
-            @atomicStore(bool, &cntx.dirty_resize, true, .monotonic);
+            @atomicStore(bool, &app_context.inner.dirty_resize, true, .monotonic);
         },
         else => {},
     }

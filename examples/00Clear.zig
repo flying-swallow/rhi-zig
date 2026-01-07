@@ -4,8 +4,7 @@ const builtin = @import("builtin");
 const sdl_application = @import("./sdl_application.zig");
 
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = 4, .sync_primative = true });
-var allocator: std.mem.Allocator = undefined;
-pub const AppContext = struct { 
+pub const Context = struct { 
     window: *sdl_application.sdl.SDL_Window = undefined, 
     allocator: std.mem.Allocator = undefined, 
     renderer: rhi.Renderer = undefined, 
@@ -16,7 +15,7 @@ pub const AppContext = struct {
     graphics_cmd_ring: CmdRingBuffer = undefined 
 };
 
-fn iterate_handler(cntx: *AppContext) anyerror!sdl_application.sdl.SDL_AppResult {
+fn iterate_handler(cntx: *Context) anyerror!sdl_application.sdl.SDL_AppResult {
     while (cntx.timekeeper.consume()) {}
 
     // draw
@@ -198,7 +197,7 @@ fn iterate_handler(cntx: *AppContext) anyerror!sdl_application.sdl.SDL_AppResult
     return sdl_application.sdl.SDL_APP_CONTINUE;
 }
 
-fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(AppContext) {
+fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(Context) {
     _ = argv;
     if (sdl_application.sdl.SDL_SetAppMetadata("Tabletop", "0.0.0", "tabletop") == false) {
         return error.SetAppMetadataFailed;
@@ -243,7 +242,7 @@ fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(AppContext) {
     var device = try rhi.Device.init(allocator, &renderer, &adapters.items[selected_adapter_index]);
     const swapchain = try rhi.Swapchain.init(allocator, &renderer, &device, 640, 480, &device.graphics_queue, window_handle, .{});
 
-    const application = try allocator.create(AppContext);
+    const application = try allocator.create(Context);
     application.* = .{
         .window = window.?,
         .allocator = allocator,
@@ -260,7 +259,7 @@ fn app_init(argv: [][*:0]u8) anyerror!sdl_application.InitResult(AppContext) {
     };
 }
 
-fn app_quit(cntx: *AppContext, result: sdl_application.sdl.SDL_AppResult) void {
+fn app_quit(cntx: *Context, result: sdl_application.sdl.SDL_AppResult) void {
     cntx.device.graphics_queue.wait_queue_idle(&cntx.renderer, &cntx.device) catch |err| {
         std.log.err("Failed to wait graphics queue idle: {}", .{err});
     };
@@ -274,7 +273,7 @@ fn app_quit(cntx: *AppContext, result: sdl_application.sdl.SDL_AppResult) void {
     std.debug.print("App quit called with result: {any}\n", .{result});
 }
 
-fn app_event(cntx: *AppContext, event: *sdl_application.sdl.SDL_Event) anyerror!sdl_application.sdl.SDL_AppResult {
+fn app_event(cntx: *Context, event: *sdl_application.sdl.SDL_Event) anyerror!sdl_application.sdl.SDL_AppResult {
     switch (event.type) {
         sdl_application.sdl.SDL_EVENT_QUIT => {
             return sdl_application.sdl.SDL_APP_SUCCESS;
@@ -287,17 +286,11 @@ fn app_event(cntx: *AppContext, event: *sdl_application.sdl.SDL_Event) anyerror!
     return sdl_application.sdl.SDL_APP_CONTINUE;
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .thread_safe = true,
-    }){};
-    defer _ = gpa.deinit();
-    allocator = gpa.allocator();
-
-    _ = sdl_application.SdlApplicaton(AppContext, .{
+pub fn main(init: std.process.Init) !void {
+    _ = sdl_application.SdlApplicaton(Context, .{
         .iterate_handler = iterate_handler,
         .app_init = app_init,
         .app_event = app_event,
         .app_quit = app_quit,
-    }).exec();
+    }).exec(init);
 }

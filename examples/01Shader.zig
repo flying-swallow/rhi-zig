@@ -5,10 +5,8 @@ const sdl_app = @import("./sdl_app.zig");
 
 pub const ResourceLoader = rhi.ResourceLoader(.{ .max_sets = 2, .buffer_size = 8 * 1024 * 1024 });
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = 4, .sync_primative = true });
-var allocator: std.mem.Allocator = undefined;
 pub const Context = struct {
     window: *sdl_app.sdl.SDL_Window = undefined,
-    allocator: std.mem.Allocator = undefined,
     renderer: rhi.Renderer = undefined,
     swapchain: rhi.Swapchain = undefined,
     device: rhi.Device = undefined,
@@ -184,8 +182,9 @@ fn iterate_handler(cntx: *sdl_app.AppContext(Context)) anyerror!sdl_app.sdl.SDL_
     return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
-fn app_init(argv: [][*:0]u8) anyerror!sdl_app.InitResult(Context) {
+fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror!sdl_app.sdl.SDL_AppResult {
     _ = argv;
+    var cntx: *Context = &app_context.inner;
     if (sdl_app.sdl.SDL_SetAppMetadata("Tabletop", "0.0.0", "tabletop") == false) {
         return error.SetAppMetadataFailed;
     }
@@ -211,31 +210,28 @@ fn app_init(argv: [][*:0]u8) anyerror!sdl_app.InitResult(Context) {
         return error.SdlError;
     };
 
-    var renderer = try rhi.Renderer.init(allocator, .{
+    var renderer = try rhi.Renderer.init(cntx.allocator, .{
         .vk = .{ .app_name = "GraphicsKernel", .enable_validation_layer = true },
     });
-    var adapters = try rhi.PhysicalAdapter.enumerate_adapters(allocator, &renderer);
-    defer adapters.deinit(allocator);
+    var adapters = try rhi.PhysicalAdapter.enumerate_adapters(cntx.allocator, &renderer);
+    defer adapters.deinit(cntx.allocator);
 
     const selected_adapter_index = rhi.PhysicalAdapter.default_select_adapter(adapters.items[0..]);
-    var device = try rhi.Device.init(allocator, &renderer, &adapters.items[selected_adapter_index]);
-    const swapchain = try rhi.Swapchain.init(allocator, &renderer, &device, 640, 480, &device.graphics_queue, window_handle, .{});
+    var device = try rhi.Device.init(cntx.allocator, &renderer, &adapters.items[selected_adapter_index]);
+    const swapchain = try rhi.Swapchain.init(cntx.allocator, &renderer, &device, 640, 480, &device.graphics_queue, window_handle, .{});
 
-    var threads = std.Io.Threaded.init_single_threaded;
-    const io = threads.io();
-
-    const application = try allocator.create(Context);
-    const fullscreen_vs = std.Io.Dir.cwd().readFileAllocOptions(io, "example_assets/fullscreen.vert.spv", allocator, .unlimited, .@"4", null) catch |err| {
+    const fullscreen_vs = std.Io.Dir.cwd().readFileAllocOptions(app_context.io, "example_assets/fullscreen.vert.spv", app_context.gpa, .unlimited, .@"4", null) catch |err| {
         std.log.err("Failed to open vertex file: {}", .{err});
         return err;
     };
+    defer app_context.gpa.free(fullscreen_vs);
 
-    defer allocator.free(fullscreen_vs);
-    const mandelbrot_fs = std.Io.Dir.cwd().readFileAllocOptions(io, "example_assets/mandelbrot.frag.spv", allocator, .unlimited, .@"4", null) catch |err| {
+    const mandelbrot_fs = std.Io.Dir.cwd().readFileAllocOptions(app_context.io, "example_assets/mandelbrot.frag.spv", app_context.gpa, .unlimited, .@"4", null) catch |err| {
         std.log.err("Failed to open fragment file: {}", .{err});
         return err;
     };
-    defer allocator.free(mandelbrot_fs);
+    defer app_context.gpa.free(mandelbrot_fs);
+
     var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
     var shader_module_create_vs: rhi.vulkan.vk.ShaderModuleCreateInfo = .{
         .code_size = fullscreen_vs.len,
@@ -361,25 +357,21 @@ fn app_init(argv: [][*:0]u8) anyerror!sdl_app.InitResult(Context) {
     var pipeline: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
     _ = try dkb.createGraphicsPipelines(device.backend.vk.device, .null_handle, 1, &pipeline_create_info, null, &pipeline);
 
-    application.* = .{
-        .window = window.?,
-        .allocator = allocator,
-        .renderer = renderer,
-        .swapchain = swapchain,
-        .device = device,
-        .timekeeper = .{ .tocks_per_s = sdl_app.sdl.SDL_GetPerformanceFrequency() },
-        .dirty_resize = false,
-        .graphics_cmd_ring = try CmdRingBuffer.init(&renderer, &device, &device.graphics_queue),
-        .pipeline = pipeline[0],
-        .layout = pipeline_layout,
-    };
-    return .{
-        .cntx = application,
-        .result = sdl_app.sdl.SDL_APP_CONTINUE,
-    };
+    cntx.window = window.?;
+    cntx.allocator = allocator;
+    cntx.renderer = renderer;
+    cntx.swapchain = swapchain;
+    cntx.device = device;
+    cntx.timekeeper = .{ .tocks_per_s = sdl_app.sdl.SDL_GetPerformanceFrequency() };
+    cntx.dirty_resize = false;
+    cntx.graphics_cmd_ring = try CmdRingBuffer.init(&renderer, &device, &device.graphics_queue);
+    cntx.pipeline = pipeline[0];
+    return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
-fn app_quit(cntx: *Context, result: sdl_app.sdl.SDL_AppResult) void {
+fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_AppResult) void {
+    var cntx: *Context = &app_context.inner;
+
     cntx.device.graphics_queue.wait_queue_idle(&cntx.renderer, &cntx.device) catch |err| {
         std.log.err("Failed to wait graphics queue idle: {}", .{err});
     };
@@ -397,7 +389,7 @@ fn app_quit(cntx: *Context, result: sdl_app.sdl.SDL_AppResult) void {
     std.debug.print("App quit called with result: {any}\n", .{result});
 }
 
-fn app_event(cntx: *Context, event: *sdl_app.sdl.SDL_Event) anyerror!sdl_app.sdl.SDL_AppResult {
+fn app_event(cntx: *sdl_app.AppContext(Context), event: *sdl_app.sdl.SDL_Event) anyerror!sdl_app.sdl.SDL_AppResult {
     switch (event.type) {
         sdl_app.sdl.SDL_EVENT_QUIT => {
             return sdl_app.sdl.SDL_APP_SUCCESS;
@@ -410,17 +402,11 @@ fn app_event(cntx: *Context, event: *sdl_app.sdl.SDL_Event) anyerror!sdl_app.sdl
     return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{
-        .thread_safe = true,
-    }){};
-    defer _ = gpa.deinit();
-    allocator = gpa.allocator();
-
+pub fn main(init: std.process.Init) !void {
     _ = sdl_app.SdlApplicaton(Context, .{
         .iterate_handler = iterate_handler,
         .app_init = app_init,
         .app_event = app_event,
         .app_quit = app_quit,
-    }).exec();
+    }).exec(init);
 }
