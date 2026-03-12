@@ -54,7 +54,7 @@ pub fn SdlApplicaton(comptime Context: type, handlers: struct {
 
         fn sdlAppEventC(appstate: ?*anyopaque, event: ?*sdl.SDL_Event) callconv(.c) sdl.SDL_AppResult {
             _ = appstate;
-            context.frame_arean.reset(.retain_capacity);
+            _ = context.frame_arean.reset(.retain_capacity);
             return handlers.app_event(&context, event.?) catch |err| {
                 std.debug.print("Error in app event handler: {any}\n", .{err});
                 return sdl.SDL_APP_FAILURE;

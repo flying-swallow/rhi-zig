@@ -13,13 +13,13 @@
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
             .hash = "N-V-__8AAAkkoQGn5z1yoNVrwqZfnYmZp8AZ5CJgoHRMQI0c",
         },
-        .vulkan = .{
-            .url = "git+https://github.com/flying-swallow/vulkan-zig.git#fcd2a9568fe4a0813ff09fbb4eb7bbd31614af3e",
-            .hash = "vulkan-0.0.0-r7Ytx_hEAwDofU2_NRZvuDYffZzZIwnRJmSALsE3lGAK",
-        },
         .sdl = .{
             .url = "git+https://github.com/castholm/SDL.git#1994ca5dbad5a3e3c670a9ab8533d86cfd97bdc0",
             .hash = "sdl-0.2.6+3.2.20-7uIn9NgjfwHH5a6HhyLHat2nHU3OP5B05QHhKJKuxEex",
+        },
+        .vulkan = .{
+            .url = "git+https://github.com/flying-swallow/vulkan-zig.git#cab23a834860368e0df29dc0923433a5cee78f2e",
+            .hash = "vulkan-0.0.0-r7Ytx9BnAwBUrPOrbx3zwJqVUpSjNKzOLBaxaNj6tUU-",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },

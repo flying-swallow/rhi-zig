@@ -7,7 +7,6 @@ pub const ResourceLoader = rhi.ResourceLoader(.{ .max_sets = 2, .buffer_size = 8
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = 4, .sync_primative = true });
 
 pub const Context = struct {
-    allocator: std.mem.Allocator = undefined,
     frame_heap: std.heap.ArenaAllocator = undefined,
 
     window: *sdl_app.sdl.SDL_Window = undefined,
@@ -129,8 +128,8 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
                 .offset = .{ .x = 0, .y = 0 },
                 .extent = .{ .width = cntx.swapchain.width, .height = cntx.swapchain.height },
             }};
-            dkb.cmdSetViewport(ring_element.cmds[0].backend.vk.cmd, 0, 1, &viewport);
-            dkb.cmdSetScissor(ring_element.cmds[0].backend.vk.cmd, 0, 1, &scissor_rect);
+            dkb.cmdSetViewport(ring_element.cmds[0].backend.vk.cmd, 0, &viewport);
+            dkb.cmdSetScissor(ring_element.cmds[0].backend.vk.cmd, 0, &scissor_rect);
             //dkb.cmdBindPipeline(ring_element.cmds[0].backend.vk.cmd, .graphics, cntx.pipeline);
             //dkb.cmdDraw(ring_element.cmds[0].backend.vk.cmd, 3, 1, 0, 0);
 
@@ -169,7 +168,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
                 .device_mask = 0,
             }};
 
-            var flush = try cntx.resource_loader.VKFlushResourceUpdate(&cntx.renderer, &.{});
+            var flush = try cntx.resource_loader.VKFlushResourceUpdate(app_context.io, &cntx.renderer, &.{});
             var semaphore_buf: [2]rhi.vulkan.vk.SemaphoreSubmitInfo = undefined;
             var wait_semaphore_info: std.ArrayList(rhi.vulkan.vk.SemaphoreSubmitInfo) = .initBuffer(&semaphore_buf);
             wait_semaphore_info.appendAssumeCapacity(.{
@@ -199,8 +198,8 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
             var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ .p_command_buffer_infos = cmd_submit[0..].ptr, .command_buffer_info_count = cmd_submit.len, .p_wait_semaphore_infos = wait_semaphore_info.items[0..].ptr, .wait_semaphore_info_count = @intCast(wait_semaphore_info.items.len), .p_signal_semaphore_infos = semaphore_info[0..].ptr, .signal_semaphore_info_count = semaphore_info.len }};
             std.debug.assert(try dkb.getFenceStatus(cntx.device.backend.vk.device, ring_element.backend.vk.fence) == .success);
             const reset_fence = [_]rhi.vulkan.vk.Fence{ring_element.backend.vk.fence};
-            _ = try dkb.resetFences(cntx.device.backend.vk.device, reset_fence.len, reset_fence[0..].ptr);
-            _ = try dkb.queueSubmit2(cntx.device.graphics_queue.backend.vk.queue, 1, submit_info[0..].ptr, ring_element.backend.vk.fence);
+            _ = try dkb.resetFences(cntx.device.backend.vk.device, reset_fence[0..]);
+            _ = try dkb.queueSubmit2(cntx.device.graphics_queue.backend.vk.queue, submit_info[0..], ring_element.backend.vk.fence);
 
             var swapchains = [_]rhi.vulkan.vk.SwapchainKHR{cntx.swapchain.backend.vk.swapchain};
             var image_indecies = [_]u32{swapchain_index};
@@ -247,11 +246,11 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
     };
     var cntx: *Context = &app_context.inner;
 
-    cntx.renderer = try rhi.Renderer.init(cntx.gpa, .{
+    cntx.renderer = try rhi.Renderer.init(app_context.gpa, .{
         .vk = .{ .app_name = "GraphicsKernel", .enable_validation_layer = true },
     });
-    var adapters = try rhi.PhysicalAdapter.enumerate_adapters(cntx.gpa, &cntx.renderer);
-    defer adapters.deinit(cntx.gpa);
+    var adapters = try rhi.PhysicalAdapter.enumerate_adapters(app_context.gpa, &cntx.renderer);
+    defer adapters.deinit(app_context.gpa);
 
     const selected_adapter_index = rhi.PhysicalAdapter.default_select_adapter(adapters.items[0..]);
     cntx.device = try rhi.Device.init(app_context.gpa, &cntx.renderer, &adapters.items[selected_adapter_index]);
@@ -268,9 +267,9 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
             .size = cube_bytes.len,
             .usage = .{ .vertex_buffer = true },
         });
-        try cntx.resource_loader.begin_copy_buffer(&cntx.renderer, &transaction);
+        try cntx.resource_loader.begin_copy_buffer(app_context.io, &cntx.renderer, &transaction);
         @memcpy(transaction.mapped.memory_range[0..cube_bytes.len], cube_bytes[0..]);
-        try cntx.resource_loader.end_copy_buffer(&cntx.renderer, &transaction);
+        try cntx.resource_loader.end_copy_buffer(app_context.io, &cntx.renderer, &transaction);
     }
     {
         var index_bytes = std.mem.asBytes(&cube_index);
@@ -279,9 +278,9 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
             .usage = .{ .index_buffer = true },
         });
         var transation: rhi.resource_loader.BufferTransaction = .{ .target = &cntx.cube_index_buffer, .offset = 0, .size = index_bytes.len };
-        try cntx.resource_loader.begin_copy_buffer(&cntx.renderer, &transation);
+        try cntx.resource_loader.begin_copy_buffer(app_context.io, &cntx.renderer, &transation);
         @memcpy(transation.mapped.memory_range[0..index_bytes.len], index_bytes[0..]);
-        try cntx.resource_loader.end_copy_buffer(&cntx.renderer, &transation);
+        try cntx.resource_loader.end_copy_buffer(app_context.io, &cntx.renderer, &transation);
     }
     return sdl_app.sdl.SDL_APP_CONTINUE;
 }

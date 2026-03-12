@@ -86,14 +86,14 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         };
         allocator: std.mem.Allocator,
         device: *rhi.Device,
-        resource_mutex: std.Thread.Mutex = .{},
+        resource_mutex: std.Io.Mutex = .init,
         upload_resource: TransferCommandGroup = undefined,
         copy_resource: TransferCommandGroup = undefined,
 
         is_running: bool = true,
 
-        queue_mutex: std.Thread.Mutex = .{},
-        queue_cond: std.Thread.Condition = .{},
+        queue_mutex: std.Io.Mutex = .init,
+        queue_cond: std.Io.Condition = .init,
         upload_queue: std.ArrayList(UploadJob) = std.ArrayList(UploadJob).empty,
 
         pub fn acquire_cmd(self: *Self, renderer: *rhi.Renderer, copy_set: *TransferCommandGroup) !rhi.Cmd {
@@ -102,7 +102,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                     var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
                     const fences = [_]rhi.vulkan.vk.Fence{copy_set.backend.vk.fences[copy_set.active_set]};
                     if (try dkb.getFenceStatus(self.device.backend.vk.device, fences[0]) == .not_ready) {
-                        _ = dkb.waitForFences(self.device.backend.vk.device, 1, fences[0..].ptr, .true, std.math.maxInt(u64)) catch unreachable;
+                        _ = dkb.waitForFences(self.device.backend.vk.device, fences[0..], .true, std.math.maxInt(u64)) catch unreachable;
                     }
                 }
                 copy_set.staging_buffer_offset = 0;
@@ -277,10 +277,10 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             return res;
         }
 
-        pub fn VKFlushResourceUpdate(self: *Self, renderer: *rhi.Renderer, wait_semaphore_info: []rhi.vulkan.vk.SemaphoreSubmitInfo) !struct { fence: rhi.vulkan.vk.Fence, semaphore: rhi.vulkan.vk.Semaphore, signaled: bool } {
+        pub fn VKFlushResourceUpdate(self: *Self, io: std.Io, renderer: *rhi.Renderer, wait_semaphore_info: []rhi.vulkan.vk.SemaphoreSubmitInfo) !struct { fence: rhi.vulkan.vk.Fence, semaphore: rhi.vulkan.vk.Semaphore, signaled: bool } {
             std.debug.assert(renderer.target_api() == .vk);
-            self.resource_mutex.lock();
-            defer self.resource_mutex.unlock();
+            try self.resource_mutex.lock(io);
+            defer self.resource_mutex.unlock(io);
 
             const group: *TransferCommandGroup = &self.upload_resource;
             const active_set = group.active_set;
@@ -315,9 +315,9 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
 
             std.debug.assert(try dkb.getFenceStatus(self.device.backend.vk.device, group.backend.vk.fences[group.active_set]) == .success);
             const reset_fence = [_]rhi.vulkan.vk.Fence{group.backend.vk.fences[group.active_set]};
-            _ = try dkb.resetFences(self.device.backend.vk.device, reset_fence.len, reset_fence[0..].ptr);
+            _ = try dkb.resetFences(self.device.backend.vk.device, reset_fence[0..]);
 
-            try dkb.queueSubmit2(self.upload_resource.queue.backend.vk.queue, 1, submit_info[0..].ptr, group.backend.vk.fences[active_set]);
+            try dkb.queueSubmit2(self.upload_resource.queue.backend.vk.queue, submit_info[0..], group.backend.vk.fences[active_set]);
             group.active_set = (group.active_set + 1) % config.max_sets;
             group.is_recording = false;
             return .{ .fence = group.backend.vk.fences[active_set], .semaphore = group.backend.vk.semaphores[active_set], .signaled = true };
@@ -388,10 +388,10 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         //    }
         //}
 
-        pub fn begin_copy_buffer(self: *Self, renderer: *rhi.Renderer, transaction: *BufferTransaction) !void {
+        pub fn begin_copy_buffer(self: *Self, io: std.Io, renderer: *rhi.Renderer, transaction: *BufferTransaction) !void {
             if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
-                self.resource_mutex.lock();
-                defer self.resource_mutex.unlock();
+                try self.resource_mutex.lock(io);
+                defer self.resource_mutex.unlock(io);
                 transaction.mapped = res: {
                     if (allocate_from_stage_buffer(&self.upload_resource, transaction.size, 4)) |s| {
                         break :res s;
@@ -404,22 +404,21 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             unreachable;
         }
 
-        pub fn end_copy_buffer(self: *Self, renderer: *rhi.Renderer, transaction: *BufferTransaction) !void {
+        pub fn end_copy_buffer(self: *Self, io: std.Io, renderer: *rhi.Renderer, transaction: *BufferTransaction) !void {
             if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                 var buffer_copy = [_]rhi.vulkan.vk.BufferCopy{.{
                     .src_offset = transaction.mapped.offset,
                     .dst_offset = transaction.offset,
                     .size = transaction.size,
                 }};
-                self.resource_mutex.lock();
-                defer self.resource_mutex.unlock();
+                try self.resource_mutex.lock(io);
+                defer self.resource_mutex.unlock(io);
                 var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
                 var cmd = try self.acquire_cmd(renderer, &self.upload_resource);
                 dkb.cmdCopyBuffer(
                     cmd.backend.vk.cmd,
                     transaction.mapped.buffer.backend.vk.buffer,
                     transaction.target.backend.vk.buffer,
-                    1,
                     &buffer_copy,
                 );
                 return;

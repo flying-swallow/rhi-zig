@@ -190,7 +190,7 @@ pub const CommandRingElement = struct {
         if (rhi.is_target_selected(.vk, renderer)) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             var fences = [_]rhi.vulkan.vk.Fence{self.backend.vk.fence};
-            _ = try dkb.waitForFences(device.backend.vk.device, 1, fences[0..].ptr, .true, std.math.maxInt(u64));
+            _ = try dkb.waitForFences(device.backend.vk.device, fences[0..], .true, std.math.maxInt(u64));
         } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
     }
 };
@@ -323,7 +323,7 @@ pub fn deinit(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, pool: *P
         var command = [_]rhi.vulkan.vk.CommandBuffer{
             self.backend.vk.cmd,
         };
-        dkb.freeCommandBuffers(device.backend.vk.device, pool.backend.vk.pool, command.len, command[0..].ptr);
+        dkb.freeCommandBuffers(device.backend.vk.device, pool.backend.vk.pool, command[0..]);
         return;
     } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
     unreachable;

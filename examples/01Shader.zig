@@ -7,18 +7,20 @@ pub const ResourceLoader = rhi.ResourceLoader(.{ .max_sets = 2, .buffer_size = 8
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = 4, .sync_primative = true });
 pub const Context = struct {
     window: *sdl_app.sdl.SDL_Window = undefined,
+    allocator: std.mem.Allocator = undefined, 
     renderer: rhi.Renderer = undefined,
     swapchain: rhi.Swapchain = undefined,
     device: rhi.Device = undefined,
     timekeeper: rhi.TimeKeeper = undefined,
     resource_loader: ResourceLoader = undefined,
-    dirty_resize: bool = false,
+    dirty_resize: bool = false, 
     graphics_cmd_ring: CmdRingBuffer = undefined,
     pipeline: rhi.vulkan.vk.Pipeline = undefined,
     layout: rhi.vulkan.vk.PipelineLayout = undefined,
 };
 
-fn iterate_handler(cntx: *sdl_app.AppContext(Context)) anyerror!sdl_app.sdl.SDL_AppResult {
+fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.sdl.SDL_AppResult {
+    var cntx = &app_context.inner;
     while (cntx.timekeeper.consume()) {}
     // draw
     {
@@ -103,8 +105,8 @@ fn iterate_handler(cntx: *sdl_app.AppContext(Context)) anyerror!sdl_app.sdl.SDL_
                 .offset = .{ .x = 0, .y = 0 },
                 .extent = .{ .width = cntx.swapchain.width, .height = cntx.swapchain.height },
             }};
-            dkb.cmdSetViewport(ring_element.cmds[0].backend.vk.cmd, 0, 1, &viewport);
-            dkb.cmdSetScissor(ring_element.cmds[0].backend.vk.cmd, 0, 1, &scissor_rect);
+            dkb.cmdSetViewport(ring_element.cmds[0].backend.vk.cmd, 0, &viewport);
+            dkb.cmdSetScissor(ring_element.cmds[0].backend.vk.cmd, 0, &scissor_rect);
             dkb.cmdBindPipeline(ring_element.cmds[0].backend.vk.cmd, .graphics, cntx.pipeline);
             dkb.cmdDraw(ring_element.cmds[0].backend.vk.cmd, 3, 1, 0, 0);
 
@@ -162,8 +164,8 @@ fn iterate_handler(cntx: *sdl_app.AppContext(Context)) anyerror!sdl_app.sdl.SDL_
             var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ .p_command_buffer_infos = cmd_submit[0..].ptr, .command_buffer_info_count = cmd_submit.len, .p_wait_semaphore_infos = wait_semaphore_info[0..].ptr, .wait_semaphore_info_count = wait_semaphore_info.len, .p_signal_semaphore_infos = semaphore_info[0..].ptr, .signal_semaphore_info_count = semaphore_info.len }};
             std.debug.assert(try dkb.getFenceStatus(cntx.device.backend.vk.device, ring_element.backend.vk.fence) == .success);
             const reset_fence = [_]rhi.vulkan.vk.Fence{ring_element.backend.vk.fence};
-            _ = try dkb.resetFences(cntx.device.backend.vk.device, reset_fence.len, reset_fence[0..].ptr);
-            _ = try dkb.queueSubmit2(cntx.device.graphics_queue.backend.vk.queue, 1, submit_info[0..].ptr, ring_element.backend.vk.fence);
+            _ = try dkb.resetFences(cntx.device.backend.vk.device, reset_fence[0..]);
+            _ = try dkb.queueSubmit2(cntx.device.graphics_queue.backend.vk.queue, submit_info[0..], ring_element.backend.vk.fence);
 
             var swapchains = [_]rhi.vulkan.vk.SwapchainKHR{cntx.swapchain.backend.vk.swapchain};
             var image_indecies = [_]u32{swapchain_index};
@@ -355,10 +357,10 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
     };
     rhi.vulkan.add_next(&pipeline_create_info[0], &pipeline_render_info);
     var pipeline: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
-    _ = try dkb.createGraphicsPipelines(device.backend.vk.device, .null_handle, 1, &pipeline_create_info, null, &pipeline);
+    _ = try dkb.createGraphicsPipelines(device.backend.vk.device, .null_handle, &pipeline_create_info, null, &pipeline);
 
+    
     cntx.window = window.?;
-    cntx.allocator = allocator;
     cntx.renderer = renderer;
     cntx.swapchain = swapchain;
     cntx.device = device;
@@ -389,13 +391,13 @@ fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_A
     std.debug.print("App quit called with result: {any}\n", .{result});
 }
 
-fn app_event(cntx: *sdl_app.AppContext(Context), event: *sdl_app.sdl.SDL_Event) anyerror!sdl_app.sdl.SDL_AppResult {
+fn app_event(app_context: *sdl_app.AppContext(Context), event: *sdl_app.sdl.SDL_Event) anyerror!sdl_app.sdl.SDL_AppResult {
     switch (event.type) {
         sdl_app.sdl.SDL_EVENT_QUIT => {
             return sdl_app.sdl.SDL_APP_SUCCESS;
         },
         sdl_app.sdl.SDL_EVENT_WINDOW_RESIZED => {
-            @atomicStore(bool, &cntx.dirty_resize, true, .monotonic);
+            @atomicStore(bool, &app_context.inner.dirty_resize, true, .monotonic);
         },
         else => {},
     }
