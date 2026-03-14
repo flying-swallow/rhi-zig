@@ -7,13 +7,12 @@ pub const ResourceLoader = rhi.ResourceLoader(.{ .max_sets = 2, .buffer_size = 8
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = 4, .sync_primative = true });
 pub const Context = struct {
     window: *sdl_app.sdl.SDL_Window = undefined,
-    allocator: std.mem.Allocator = undefined, 
     renderer: rhi.Renderer = undefined,
     swapchain: rhi.Swapchain = undefined,
     device: rhi.Device = undefined,
     timekeeper: rhi.TimeKeeper = undefined,
     resource_loader: ResourceLoader = undefined,
-    dirty_resize: bool = false, 
+    dirty_resize: bool = false,
     graphics_cmd_ring: CmdRingBuffer = undefined,
     pipeline: rhi.vulkan.vk.Pipeline = undefined,
     layout: rhi.vulkan.vk.PipelineLayout = undefined,
@@ -212,15 +211,15 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
         return error.SdlError;
     };
 
-    var renderer = try rhi.Renderer.init(cntx.allocator, .{
+    var renderer = try rhi.Renderer.init(app_context.gpa, .{
         .vk = .{ .app_name = "GraphicsKernel", .enable_validation_layer = true },
     });
-    var adapters = try rhi.PhysicalAdapter.enumerate_adapters(cntx.allocator, &renderer);
-    defer adapters.deinit(cntx.allocator);
+    var adapters = try rhi.PhysicalAdapter.enumerate_adapters(app_context.gpa, &renderer);
+    defer adapters.deinit(app_context.gpa);
 
     const selected_adapter_index = rhi.PhysicalAdapter.default_select_adapter(adapters.items[0..]);
-    var device = try rhi.Device.init(cntx.allocator, &renderer, &adapters.items[selected_adapter_index]);
-    const swapchain = try rhi.Swapchain.init(cntx.allocator, &renderer, &device, 640, 480, &device.graphics_queue, window_handle, .{});
+    var device = try rhi.Device.init(app_context.gpa, &renderer, &adapters.items[selected_adapter_index]);
+    const swapchain = try rhi.Swapchain.init(app_context.gpa, &renderer, &device, 640, 480, &device.graphics_queue, window_handle, .{});
 
     const fullscreen_vs = std.Io.Dir.cwd().readFileAllocOptions(app_context.io, "example_assets/fullscreen.vert.spv", app_context.gpa, .unlimited, .@"4", null) catch |err| {
         std.log.err("Failed to open vertex file: {}", .{err});
@@ -359,7 +358,6 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
     var pipeline: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
     _ = try dkb.createGraphicsPipelines(device.backend.vk.device, .null_handle, &pipeline_create_info, null, &pipeline);
 
-    
     cntx.window = window.?;
     cntx.renderer = renderer;
     cntx.swapchain = swapchain;
@@ -387,7 +385,6 @@ fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_A
     cntx.device.deinit(&cntx.renderer);
     cntx.renderer.deinit();
 
-    cntx.allocator.destroy(cntx);
     std.debug.print("App quit called with result: {any}\n", .{result});
 }
 
