@@ -193,7 +193,7 @@ pub const CommandRingElement = struct {
         if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             var fences = [_]rhi.vulkan.vk.Fence{self.backend.vk.fence};
-            _ = try dkb.waitForFences(device.backend.vk.device, 1, fences[0..].ptr, .true, std.math.maxInt(u64));
+            _ = try dkb.waitForFences(device.backend.vk.device, fences[0..], .true, std.math.maxInt(u64));
             return;
         }
         unreachable;

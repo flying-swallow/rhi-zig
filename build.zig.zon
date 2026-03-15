@@ -21,6 +21,10 @@
             .url = "git+https://github.com/flying-swallow/vulkan-zig.git#cab23a834860368e0df29dc0923433a5cee78f2e",
             .hash = "vulkan-0.0.0-r7Ytx9BnAwBUrPOrbx3zwJqVUpSjNKzOLBaxaNj6tUU-",
         },
+        .zla = .{
+            .url = "git+https://github.com/flying-swallow/zig-linear-algebra.git#02ae65d4235e8db9f9a54c68506bc952afbdcad6",
+            .hash = "zla-0.0.2-zqm18F6nAQBFAQsYpFl_Jr0lzud3zGK6y0N1l2Djm3R_",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },
 }

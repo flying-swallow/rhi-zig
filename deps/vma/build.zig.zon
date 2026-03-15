@@ -7,10 +7,6 @@
         .vma = .{
             .url = "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/archive/refs/tags/v3.3.0.tar.gz",
             .hash = "N-V-__8AAIutPgABk6NlXZhlJ5P8qVECvakZIKoO94h7xUOw"
-        },
-        .vulkan = .{
-            .url = "git+https://github.com/KhronosGroup/Vulkan-Headers.git#0aae9c6b5f99d63a5eb7d69a3a1a95e2fa239bc2",
-            .hash = "N-V-__8AAAmOKwLuDNNlULso_7Z1Mrc-23Om-HiBMiLXjNDS"
         }
     },
     .paths = .{

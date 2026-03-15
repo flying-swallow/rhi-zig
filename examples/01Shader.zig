@@ -197,20 +197,7 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) !sdl_app
     const window = sdl_app.sdl.SDL_CreateWindow("00-helloworld", 640, 480, sdl_app.sdl.SDL_WINDOW_RESIZABLE);
     if (window == null) return error.CreateWindowFailed;
     errdefer sdl_app.sdl.SDL_DestroyWindow(window);
-
-    const window_handle: rhi.WindowHandle = p: {
-        if (builtin.os.tag == .windows) {} else if (builtin.os.tag == .linux) {
-            if (std.mem.eql(u8, std.mem.sliceTo(sdl_app.sdl.SDL_GetCurrentVideoDriver(), 0), "x11")) {
-                break :p rhi.WindowHandle{ .x11 = .{
-                    .display = sdl_app.sdl.SDL_GetPointerProperty(sdl_app.sdl.SDL_GetWindowProperties(window), sdl_app.sdl.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null).?,
-                    .window = @intCast(sdl_app.sdl.SDL_GetNumberProperty(sdl_app.sdl.SDL_GetWindowProperties(window), sdl_app.sdl.SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)),
-                } };
-            } else if (std.mem.eql(u8, std.mem.sliceTo(sdl_app.sdl.SDL_GetCurrentVideoDriver(), 0), "wayland")) {
-                break :p rhi.WindowHandle{ .wayland = .{ .display = sdl_app.sdl.SDL_GetPointerProperty(sdl_app.sdl.SDL_GetWindowProperties(window), sdl_app.sdl.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null).?, .surface = sdl_app.sdl.SDL_GetPointerProperty(sdl_app.sdl.SDL_GetWindowProperties(window), sdl_app.sdl.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null).?, .shell_surface = null } };
-            }
-        } else if (builtin.os.tag == .macos or builtin.os.tag == .ios) {}
-        return error.SdlError;
-    };
+    const window_handle = try sdl_app.sdl_window_handle_to_rhi_window_handle(window.?);
 
     var renderer = try rhi.Renderer.init(app_context.gpa, .{
         .vk = .{ .app_name = "GraphicsKernel", .enable_validation_layer = true },

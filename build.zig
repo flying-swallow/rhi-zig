@@ -23,10 +23,12 @@ pub fn build(b: *std.Build) !void {
     });
 
     const lib = b.addLibrary(.{ .name = "rhi", .linkage = .static, .root_module = engine_module });
-
+    
+    const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
     if (b.lazyDependency("vma", .{
         .target = target,
         .optimize = optimize,
+        .registry = registry 
     })) |vma_dep| {
         engine_module.addImport(
             "vma",
@@ -35,7 +37,6 @@ pub fn build(b: *std.Build) !void {
         engine_module.linkLibrary(vma_dep.artifact("vma"));
     }
 
-    const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
     const vulkan = b.dependency("vulkan", .{
         .registry = registry,
     }).module("vulkan-zig");
@@ -82,7 +83,16 @@ pub fn build(b: *std.Build) !void {
         .{ .glsl = "fullscreen.vert" },
     };
 
-    const examples = [_]struct { file: []const u8, name: []const u8, assets: []const Asset = &.{} }{ .{ .file = "examples/00Clear.zig", .name = "00_clear" }, .{ .file = "examples/01Shader.zig", .name = "01_shader", .assets = assets_shader_01[0..] }, .{ .file = "examples/02Mesh.zig", .name = "02_mesh" } };
+    //const asset_02 = [_] Asset {
+    //    .{ .glsl =  "02_mesh.vert" },
+    //    .{ .glsl =  "02_mesh.frag" },
+    //};
+
+    const examples = [_]struct { file: []const u8, name: []const u8, assets: []const Asset = &.{} }{
+        .{ .file = "examples/00Clear.zig", .name = "00_clear" },
+        .{ .file = "examples/01Shader.zig", .name = "01_shader", .assets = assets_shader_01[0..] },
+        .{ .file = "examples/02Mesh.zig", .name = "02_mesh" }, //, .assets = asset_02[0..] },
+    };
     for (examples) |example| {
         const exe = b.addExecutable(.{
             .name = example.name,

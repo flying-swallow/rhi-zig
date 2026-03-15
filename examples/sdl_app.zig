@@ -6,6 +6,8 @@ pub const sdl = @cImport({
     @cInclude("SDL3/SDL_main.h");
 });
 const std = @import("std");
+const rhi = @import("rhi");
+const builtin = @import("builtin");
 
 pub fn AppContext(comptime Context: type) type {
     return struct {
@@ -14,6 +16,33 @@ pub fn AppContext(comptime Context: type) type {
         frame_arean: std.heap.ArenaAllocator,
         inner: Context,
     };
+}
+
+pub fn sdl_window_handle_to_rhi_window_handle(window: *sdl.SDL_Window) !rhi.WindowHandle {
+    // zig fmt: off
+    if (builtin.os.tag == .windows) {
+        return rhi.WindowHandle{ .win32 = .{
+            .hinstance = sdl.SDL_GetPointerProperty(sdl.SDL_GetWindowProperties(window), sdl.SDL_PROP_WINDOW_WIN32_HINSTANCE_POINTER, null).?,
+            .hwnd = sdl.SDL_GetPointerProperty(sdl.SDL_GetWindowProperties(window), sdl.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null).?,
+        } };
+    } else if (builtin.os.tag == .linux) {
+        if (std.mem.eql(u8, std.mem.sliceTo(sdl.SDL_GetCurrentVideoDriver(), 0), "x11")) {
+            return rhi.WindowHandle{ .x11 = .{
+                .display = sdl.SDL_GetPointerProperty(sdl.SDL_GetWindowProperties(window), sdl.SDL_PROP_WINDOW_X11_DISPLAY_POINTER, null).?,
+                .window = @intCast(sdl.SDL_GetNumberProperty(sdl.SDL_GetWindowProperties(window), sdl.SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0)),
+            } };
+        } else if (std.mem.eql(u8, std.mem.sliceTo(sdl.SDL_GetCurrentVideoDriver(), 0), "wayland")) {
+            return rhi.WindowHandle { .wayland = .{ 
+                .display = sdl.SDL_GetPointerProperty(sdl.SDL_GetWindowProperties(window), sdl.SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, null).?, 
+                .surface = sdl.SDL_GetPointerProperty(sdl.SDL_GetWindowProperties(window), sdl.SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, null).?, 
+                .shell_surface = null 
+            } };
+        }
+    } else if (builtin.os.tag == .macos or builtin.os.tag == .ios) {
+
+    }
+    // zig fmt: on
+    return error.SdlError;
 }
 
 pub fn SdlApplicaton(comptime Context: type, handlers: struct {
