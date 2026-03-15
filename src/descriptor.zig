@@ -4,21 +4,14 @@ pub const Descriptor = @This();
 
 cookie: u32,
 image: *rhi.Image,
-buffer: *rhi.Buffer, 
+buffer: *rhi.Buffer,
 backend: union(rhi.Backend) {
-    vk: rhi.wrapper_platform_type(.vk, struct {
-        type: rhi.vulkan.vk.DescriptorType,
-        view: union {
-            image: rhi.vulkan.vk.DescriptorImageInfo,
-            buffer: rhi.vulkan.vk.DescriptorBufferInfo,
-        } 
-    }),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {
-
-    }), 
-    mtl: rhi.wrapper_platform_type(.mtl, struct {
-
-    }), 
+    vk: if (rhi.platform_has_api(.vk)) struct { type: rhi.vulkan.vk.DescriptorType, view: union {
+        image: rhi.vulkan.vk.DescriptorImageInfo,
+        buffer: rhi.vulkan.vk.DescriptorBufferInfo,
+    } } else void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
 },
 
 //pub const Ownership = enum(u8) {
@@ -36,8 +29,8 @@ backend: union(rhi.Backend) {
 //                image_view: volk.c.VkImageView = null,
 //                sampler: volk.c.VkSampler = null,
 //            }),
-//            dx12: rhi.wrapper_platform_type(.dx12, struct {}), 
-//            mtl: rhi.wrapper_platform_type(.mtl, struct {}), 
+//            dx12: rhi.wrapper_platform_type(.dx12, struct {}),
+//            mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 //        },
 //
 //        pub fn descriptor(self: *Self) Descriptor {
@@ -67,7 +60,7 @@ backend: union(rhi.Backend) {
 //        pub fn init(renderer: *rhi.Renderer, tex: *rhi.Texture, sam: *rhi.Sampler) !Self {
 //            if (rhi.is_target_selected(.vk, renderer)) {
 //                var image_view_usage = volk.c.VkImageViewUsageCreateInfo {
-//                    .sType = volk.c.VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO 
+//                    .sType = volk.c.VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO
 //                };
 //                var image_view_create_info = volk.c.VkImageViewCreateInfo {
 //                    .sType = volk.c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -86,5 +79,3 @@ backend: union(rhi.Backend) {
 //        //}
 //    };
 //}
-
-

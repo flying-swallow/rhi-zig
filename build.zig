@@ -41,11 +41,13 @@ pub fn build(b: *std.Build) !void {
     }).module("vulkan-zig");
     engine_module.addImport("vulkan", vulkan);
 
-    const activate_zwindows = @import("zwindows").activateSdk(b, zwindows);
-    lib.step.dependOn(activate_zwindows);
-
+    if (builtin.target.os.tag == .windows) {
+        const zwindow = @import("zwindows");
+        const activate_zwindows = zwindow.activateSdk(b, zwindows);
+        lib.step.dependOn(activate_zwindows);
+        zwindow.install_d3d12(&lib.step, zwindows, .bin);
+    }
     // Install vendored binaries
-    @import("zwindows").install_d3d12(&lib.step, zwindows, .bin);
 
     b.installArtifact(lib);
     const mod_tests = b.addTest(.{
@@ -76,15 +78,11 @@ pub fn build(b: *std.Build) !void {
     });
 
     const assets_shader_01 = [_]Asset{
-        .{ .glsl =  "mandelbrot.frag" },
-        .{ .glsl =  "fullscreen.vert" },
+        .{ .glsl = "mandelbrot.frag" },
+        .{ .glsl = "fullscreen.vert" },
     };
 
-    const examples = [_]struct { file: []const u8, name: []const u8, assets: []const Asset = &.{} }{
-        .{ .file = "examples/00Clear.zig", .name = "00_clear" },
-        .{ .file = "examples/01Shader.zig", .name = "01_shader", .assets = assets_shader_01[0..] },
-        .{ .file = "examples/02Mesh.zig", .name = "02_mesh" }
-    };
+    const examples = [_]struct { file: []const u8, name: []const u8, assets: []const Asset = &.{} }{ .{ .file = "examples/00Clear.zig", .name = "00_clear" }, .{ .file = "examples/01Shader.zig", .name = "01_shader", .assets = assets_shader_01[0..] }, .{ .file = "examples/02Mesh.zig", .name = "02_mesh" } };
     for (examples) |example| {
         const exe = b.addExecutable(.{
             .name = example.name,

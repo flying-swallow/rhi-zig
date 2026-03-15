@@ -6,10 +6,10 @@ const builtin = @import("builtin");
 pub const Buffer = @This();
 mapped_region: ?[]u8 = null,
 backend: union {
-    vk: rhi.wrapper_platform_type(.vk, struct {
+    vk: if (rhi.platform_has_api(.vk)) struct {
         buffer: rhi.vulkan.vk.Buffer = .null_handle,
         allocation: vma.c.VmaAllocation = null,
-    }),
+    } else void,
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 } = undefined,
@@ -182,11 +182,7 @@ pub fn init_general(
 
 pub fn get_mapped_region(self: *Buffer, offset: usize, size: usize) !MappedMemoryRange {
     if (self.mapped_region) |region| {
-        return .{ 
-            .offset = offset, 
-            .buffer = self, 
-            .memory_range = region[offset .. offset + size] 
-        };
+        return .{ .offset = offset, .buffer = self, .memory_range = region[offset .. offset + size] };
     }
     return error.BufferNotMapped;
 }

@@ -6,15 +6,15 @@ const builtin = @import("builtin");
 
 pub const Renderer = @This();
 backend: union(rhi.Backend) {
-    vk: rhi.wrapper_platform_type(.vk, struct {
+    vk: if (rhi.platform_has_api(.vk)) struct {
         api_version: u32,
         instance: rhi.vulkan.vk.Instance,
         debug_message_utils: ?rhi.vulkan.vk.DebugUtilsMessengerEXT,
         vkb: rhi.vulkan.vk.BaseWrapper,
         ikb: rhi.vulkan.vk.InstanceWrapper,
-    }),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    } else void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void 
 },
 
 pub fn apiString(self: *Renderer) []const u8 {

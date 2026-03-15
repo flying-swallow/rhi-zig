@@ -20,28 +20,21 @@ pub const DescriptorType = enum(u8) {
     acceleration_structure, // VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR
 };
 
-pub const DescriptorRangeBits = enum(u8) { 
-    none = 0, 
-    paritially_bound = 1 << 0, 
-    array = 1 << 1, 
-    variable_sized_array = 1 << 2 
-};
+pub const DescriptorRangeBits = enum(u8) { none = 0, paritially_bound = 1 << 0, array = 1 << 1, variable_sized_array = 1 << 2 };
 
 backend: union {
-    vk: rhi.wrapper_platform_type(.vk, struct { 
-        layout: rhi.vulkan.vk.PipelineLayout 
-    }),
+    vk: rhi.wrapper_platform_type(.vk, struct { layout: rhi.vulkan.vk.PipelineLayout }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },
 
 pub fn deinit(self: *PipelineLayout, renderer: *rhi.Renderer, device: *rhi.Device) void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.destroyPipelineLayout(device.backend.vk.device, self.backend.vk.layout, null);
-    } else if (rhi.is_target_selected(.dx12, renderer)) {
-    } else if (rhi.is_target_selected(.mtl, renderer)) {
+        return;
     }
+    unreachable;
 }
 
 pub const DescriptorRangeDesc = struct {
@@ -121,7 +114,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
                         .acceleration_structure => .acceleration_structure_khr,
                     },
                     .descriptor_count = descriptor_range.descriptor_num,
-                    .stage_flags = .{} //descriptor_range.shader_stages,
+                    .stage_flags = .{}, //descriptor_range.shader_stages,
                 };
                 try binding_set.descriptor_bindings.append(allocator, layout_binding);
             }

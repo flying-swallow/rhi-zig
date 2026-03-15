@@ -3,17 +3,17 @@ const vma = @import("vma");
 const std = @import("std");
 
 pub const Barrier = union {
-    vk: rhi.wrapper_platform_type(.vk, rhi.vulkan.vk.ImageMemoryBarrier2),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    vk: if (rhi.platform_has_api(.vk)) rhi.vulkan.vk.ImageMemoryBarrier2 else void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
 };
 
 pub const Image = @This();
 backend: union {
-    vk: rhi.wrapper_platform_type(.vk, struct {
+    vk: if (rhi.platform_has_api(.vk)) struct {
         image: rhi.vulkan.vk.Image,
         allocation: ?vma.c.VmaAllocation = null,
-    }),
+    } else void,
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },

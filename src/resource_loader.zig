@@ -76,11 +76,10 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
 
             // zig fmt: off
             backend: union { 
-                vk: rhi.wrapper_platform_type(.vk, 
-                    struct { 
+                vk: if (rhi.platform_has_api(.vk)) struct { 
                         semaphores: [config.max_sets]rhi.vulkan.vk.Semaphore, 
                         fences: [config.max_sets]rhi.vulkan.vk.Fence 
-                    }) 
+                    } else void 
             },
             // zig fmt: on
         };
@@ -312,7 +311,6 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             }};
             // zig fmt: on
 
-
             std.debug.assert(try dkb.getFenceStatus(self.device.backend.vk.device, group.backend.vk.fences[group.active_set]) == .success);
             const reset_fence = [_]rhi.vulkan.vk.Fence{group.backend.vk.fences[group.active_set]};
             _ = try dkb.resetFences(self.device.backend.vk.device, reset_fence[0..]);
@@ -489,7 +487,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                 );
                 // zig fmt: on
                 return;
-            } 
+            }
             unreachable;
         }
     };
