@@ -4,9 +4,9 @@ const vulkan = @import("vulkan.zig");
 
 pub const Pipeline = @This();
 backend: union {
-    vk: rhi.wrapper_platform_type(.vk, struct { pipeline: rhi.vulkan.vk.Pipeline }),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    vk: if (rhi.platform_has_api(.vk)) struct { pipeline: rhi.vulkan.vk.Pipeline } else void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
 },
 
 pub fn deinit(self: *Pipeline, renderer: *rhi.Renderer, device: *rhi.Device) void {
@@ -19,18 +19,7 @@ pub fn deinit(self: *Pipeline, renderer: *rhi.Renderer, device: *rhi.Device) voi
 // https://registry.khronos.org/vulkan/specs/latest/man/html/VkPrimitiveTopology.html
 // https://learn.microsoft.com/en-us/windows/win32/api/d3dcommon/ne-d3dcommon-d3d_primitive_topology
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_primitive_topology_type
-pub const Toplogy = enum(u8) { 
-    point_list, 
-    line_list, 
-    line_strip, 
-    triangle_list, 
-    triangle_strip, 
-    line_list_with_adjacency, 
-    line_strip_with_adjacency, 
-    triangle_list_with_adjacency, 
-    triangle_strip_with_adjacency, 
-    patch_list 
-};
+pub const Toplogy = enum(u8) { point_list, line_list, line_strip, triangle_list, triangle_strip, line_list_with_adjacency, line_strip_with_adjacency, triangle_list_with_adjacency, triangle_strip_with_adjacency, patch_list };
 
 pub const PrimativeRestart = enum(u2) {
     disable,
@@ -40,10 +29,7 @@ pub const PrimativeRestart = enum(u2) {
 
 // https://registry.khronos.org/vulkan/specs/latest/man/html/VkCullModeFlagBits.html
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_cull_mode
-pub const CullMode = struct {
-    front_bit: u1,
-    back_bit: u1
-};
+pub const CullMode = struct { front_bit: u1, back_bit: u1 };
 
 pub const FillMode = enum(u1) {
     solid,
@@ -57,18 +43,10 @@ pub const FillMode = enum(u1) {
     }
 };
 
-pub const VertexAttributeDesc = struct { 
-    d3d: struct {
-        semantic_name: []const u8,
-        sementic_index: u32,
-    }, 
-    vk: struct { 
-        location: u32 
-    }, 
-    offset: u32, 
-    format: rhi.Format, 
-    streamIndex: u16 
-};
+pub const VertexAttributeDesc = struct { d3d: struct {
+    semantic_name: []const u8,
+    sementic_index: u32,
+}, vk: struct { location: u32 }, offset: u32, format: rhi.Format, streamIndex: u16 };
 
 // https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#primsrast-depthbias-computation
 // https://learn.microsoft.com/en-us/windows/win32/direct3d11/d3d10-graphics-programming-guide-output-merger-stage-depth-bias
@@ -213,7 +191,7 @@ pub const BlendOp = enum(u3) {
             .subtract => .subtract,
             .reverse_subtract => .reverse_subtract,
             .min => .min,
-            .max => .max
+            .max => .max,
         };
     }
 };
@@ -289,15 +267,7 @@ pub const ShaderDesc = struct {
     },
 };
 
-pub const GraphicsPipelineDesc = struct { 
-    layout: *rhi.PipelineLayout, 
-    vertex_input: ?VertexInputDesc, 
-    input_assembly: InputAssemblyDesc, 
-    rasterization: RasterizationDesc, 
-    multisample: ?MultisampleDesc, 
-    output_merger: OutputMergerDesc, 
-    shaders: []ShaderDesc 
-};
+pub const GraphicsPipelineDesc = struct { layout: *rhi.PipelineLayout, vertex_input: ?VertexInputDesc, input_assembly: InputAssemblyDesc, rasterization: RasterizationDesc, multisample: ?MultisampleDesc, output_merger: OutputMergerDesc, shaders: []ShaderDesc };
 
 pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.Device, desc: *const GraphicsPipelineDesc) !Pipeline {
     var pipline_shader_stages: std.ArrayList(rhi.vulkan.vk.PipelineShaderStageCreateInfo) = .empty;
@@ -335,15 +305,14 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
         .polygon_mode = rhi.vulkan.vk_fill_mode(desc.rasterization.fill_mode),
         .cull_mode = .{
             .front_bit = desc.rasterization.cull_mode.front_bit,
-            .back_bit = desc.rasterization.cull_mode.back_bit, 
+            .back_bit = desc.rasterization.cull_mode.back_bit,
         },
-        .depth_bias_constant_factor = if(desc.rasterization.depth_bias) |bias| bias.constantelse else 0,
-        .depth_bias_slope_factor = if(desc.rasterization.depth_bias) |bias| bias.slope else 0,
-        .depth_bias_clamp = if(desc.rasterization.depth_bias) |bias| bias.clamp  else 0,
-        .depth_bias_enable = if(desc.rasterization.depth_bias) |_| true else false,
+        .depth_bias_constant_factor = if (desc.rasterization.depth_bias) |bias| bias.constantelse else 0,
+        .depth_bias_slope_factor = if (desc.rasterization.depth_bias) |bias| bias.slope else 0,
+        .depth_bias_clamp = if (desc.rasterization.depth_bias) |bias| bias.clamp else 0,
+        .depth_bias_enable = if (desc.rasterization.depth_bias) |_| true else false,
         .line_width = 1.0,
     };
-
 
     for (desc.output_merger.color_attachments) |attachment| {
         color_attachment_formats.append(alloc, rhi.vulkan.vk_format(attachment.format));
@@ -355,22 +324,10 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
             .src_alpha_blend_factor = attachment.src_alpha_blend_factor.to_vk(),
             .dst_alpha_blend_factor = attachment.dst_alpha_blend_factor.to_vk(),
             .alpha_blend_op = attachment.alpha_blend_op.to_vk(),
-            .color_write_mask = .{
-                .r_bit = attachment.write_mask.r_bit,
-                .g_bit = attachment.write_mask.g_bit,
-                .b_bit = attachment.write_mask.b_bit,
-                .a_bit = attachment.write_mask.a_bit 
-            },
+            .color_write_mask = .{ .r_bit = attachment.write_mask.r_bit, .g_bit = attachment.write_mask.g_bit, .b_bit = attachment.write_mask.b_bit, .a_bit = attachment.write_mask.a_bit },
         });
     }
-    var pipeline_blend_state: rhi.vulkan.vk.PipelineColorBlendStateCreateInfo = .{
-        .logic_op_enable = .false,
-        .logic_op = .clear,
-        .blend_constants = .{ 0.0, 0.0, 0.0, 0.0 },
-        .attachment_count = color_blend_attachments.items.len,
-        .p_attachments = &color_blend_attachments.items
-    };
-
+    var pipeline_blend_state: rhi.vulkan.vk.PipelineColorBlendStateCreateInfo = .{ .logic_op_enable = .false, .logic_op = .clear, .blend_constants = .{ 0.0, 0.0, 0.0, 0.0 }, .attachment_count = color_blend_attachments.items.len, .p_attachments = &color_blend_attachments.items };
 
     for (desc.shaders) |shader| {
         std.debug.assert(shader.vk != null);
@@ -380,23 +337,19 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
             std.log.err("Failed to create fragment shader module: {}", .{err});
             return err;
         };
-        pipline_shader_stages.append(alloc, .{ 
-            .stage = .{
-                .vertex_bit = shader.stage.stage_vertex,
-                .tessellation_control_bit = shader.stage.stage_tesselation_control,
-                .tessellation_evaluation_bit = shader.stage.stage_tesselation_evaluation,
-                .geometry_bit = shader.stage.stage_geometry,
-                .fragment_bit = shader.stage.stage_pixel,
-                .compute_bit = shader.stage.stage_compute,
-            }, 
-            .module = module, 
-            .p_name = shader.entry_point 
-        });
+        pipline_shader_stages.append(alloc, .{ .stage = .{
+            .vertex_bit = shader.stage.stage_vertex,
+            .tessellation_control_bit = shader.stage.stage_tesselation_control,
+            .tessellation_evaluation_bit = shader.stage.stage_tesselation_evaluation,
+            .geometry_bit = shader.stage.stage_geometry,
+            .fragment_bit = shader.stage.stage_pixel,
+            .compute_bit = shader.stage.stage_compute,
+        }, .module = module, .p_name = shader.entry_point });
     }
-    
-    var vertex_input_state = rhi.vulkan.vk.PipelineVertexInputStateCreateInfo {};
 
-    if(desc.vertex_input) |vertex_input| {
+    var vertex_input_state = rhi.vulkan.vk.PipelineVertexInputStateCreateInfo{};
+
+    if (desc.vertex_input) |vertex_input| {
         for (vertex_input.streams) |stream| {
             try binding_descriptions.append(alloc, .{
                 .binding = stream.binding_slot,
@@ -414,46 +367,44 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
                 .offset = attribute.offset,
             });
         }
-        vertex_input_state = rhi.vulkan.vk.PipelineVertexInputStateCreateInfo {
+        vertex_input_state = rhi.vulkan.vk.PipelineVertexInputStateCreateInfo{
             .vertex_binding_description_count = binding_descriptions.items.len,
             .p_vertex_binding_descriptions = &binding_descriptions.items[0],
             .vertex_attribute_description_count = attribute_descriptions.items.len,
             .p_vertex_attribute_descriptions = &attribute_descriptions.items[0],
         };
     }
-    
-    var pipeline_input_assembly = rhi.vulkan.vk.PipelineInputAssemblyStateCreateInfo {
+
+    var pipeline_input_assembly = rhi.vulkan.vk.PipelineInputAssemblyStateCreateInfo{
         .topology = rhi.vulkan.vk_topology(desc.input_assembly.toplogy),
-        .primitive_restart_enable = if(desc.input_assembly.primative_restart) .true else .false,
+        .primitive_restart_enable = if (desc.input_assembly.primative_restart) .true else .false,
     };
-    
-    var multisample_state = rhi.vulkan.vk.PipelineMultisampleStateCreateInfo{}; 
-    if(desc.multisample) |multi| {
+
+    var multisample_state = rhi.vulkan.vk.PipelineMultisampleStateCreateInfo{};
+    if (desc.multisample) |multi| {
         multisample_state.rasterization_samples = .{};
         multisample_state.sample_shading_enable = .false;
         multisample_state.min_sample_shading = 1.0;
         multisample_state.p_sample_mask = null;
         multisample_state.alpha_to_coverage_enable = multi.alpha_to_coverage;
         multisample_state.alpha_to_one_enable = .false;
-    } 
+    }
 
-    var pipeline_create_info =  [1]rhi.vulkan.vk.GraphicsPipelineCreateInfo {
-        .{
-            .stage_count = pipline_shader_stages.items.len,
-            .p_stages = &pipline_shader_stages.items,
-            .subpass = 0,
-            .layout = desc.layout.backend.vk.layout,
-            .base_pipeline_index = -1,
-            .p_color_blend_state = &pipeline_blend_state,
-            .p_rasterization_state = &rasterization_state,
-            .p_multisample_state =  &multisample_state,
-            .p_vertex_input_state = &vertex_input_state,
-            .p_viewport_state = &viewport_state,
-            .p_depth_stencil_state = null,
-            .p_input_assembly_state = &pipeline_input_assembly,
-            .p_dynamic_state = &dynamic_state,
-        }
-    };
+    var pipeline_create_info = [1]rhi.vulkan.vk.GraphicsPipelineCreateInfo{.{
+        .stage_count = pipline_shader_stages.items.len,
+        .p_stages = &pipline_shader_stages.items,
+        .subpass = 0,
+        .layout = desc.layout.backend.vk.layout,
+        .base_pipeline_index = -1,
+        .p_color_blend_state = &pipeline_blend_state,
+        .p_rasterization_state = &rasterization_state,
+        .p_multisample_state = &multisample_state,
+        .p_vertex_input_state = &vertex_input_state,
+        .p_viewport_state = &viewport_state,
+        .p_depth_stencil_state = null,
+        .p_input_assembly_state = &pipeline_input_assembly,
+        .p_dynamic_state = &dynamic_state,
+    }};
     var pipeline_render_info: rhi.vulkan.vk.PipelineRenderingCreateInfo = .{
         .color_attachment_count = color_attachment_formats.items.len,
         .p_color_attachment_formats = &color_attachment_formats.items,
@@ -462,7 +413,7 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
         .stencil_attachment_format = .undefined,
     };
     rhi.vulkan.add_next(&pipeline_create_info[0], &pipeline_render_info);
-    
+
     var pipeline: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
     _ = try dkb.createGraphicsPipelines(device.backend.vk.device, .null_handle, 1, &pipeline_create_info, null, &pipeline);
 

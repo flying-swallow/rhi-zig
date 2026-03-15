@@ -12,11 +12,11 @@ pub const AddressMode = enum(u2) { mirror = 0, repeat = 1, clamp_to_edge = 2, cl
 
 pub const Sampler = @This();
 backend: union(rhi.Backend) {
-    vk: rhi.wrapper_platform_type(.vk, struct {
+    vk: if (rhi.platform_has_api(.vk)) struct {
         sampler: rhi.vulkan.vk.Sampler = .null_handle,
-    }),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    } else void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
 },
 
 pub fn descriptor(self: *Sampler) rhi.Descriptor {

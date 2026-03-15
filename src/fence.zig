@@ -4,11 +4,11 @@ const vulkan = @import("vulkan.zig");
 
 pub const Fence = @This();
 backend: union {
-    vk: rhi.wrapper_platform_type(.vk, struct {
+    vk: if (rhi.platform_has_api(.vk)) struct {
         fence: rhi.vulkan.vk.Fence = .null_handle,
-    }),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    } else void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
 } = undefined,
 
 pub const FenceStatus = enum {

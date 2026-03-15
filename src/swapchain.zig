@@ -33,7 +33,7 @@ pub const WindowHandle = if (builtin.os.tag == .windows) union(WindowType) {
     },
 } else if (builtin.os.tag == .macos or .ios) union(WindowType) {
     metal: struct {
-        layer: *anyopaque = null,
+        layer: ?*anyopaque = null,
     },
 } else {
     // Unsupported platform
@@ -44,8 +44,8 @@ allocator: std.mem.Allocator,
 present_queue: *rhi.Queue,
 width: u16,
 height: u16,
-backend: union(rhi.Backend) {
-    vk: rhi.wrapper_platform_type(.vk, struct {
+backend: union {
+    vk: if (rhi.platform_has_api(.vk)) struct {
         pub const Self = @This();
 
         format: rhi.vulkan.vk.Format,
@@ -63,9 +63,9 @@ backend: union(rhi.Backend) {
         pub fn current_semaphore(self: *Self) rhi.vulkan.vk.Semaphore {
             return self.signal_semaphores[self.signal_idx];
         }
-    }),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    } else void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
 },
 
 fn vk_wapchain_create_info_khr_default(option: struct { surface: rhi.vulkan.vk.SurfaceKHR, format: rhi.vulkan.vk.Format, present_mode: rhi.vulkan.vk.PresentModeKHR, color_space: rhi.vulkan.vk.ColorSpaceKHR, width: u32, height: u32, image_count: usize }) rhi.vulkan.vk.SwapchainCreateInfoKHR {
@@ -140,7 +140,7 @@ fn __priority_BT2020_G2084_10BIT(surface: *const rhi.vulkan.vk.SurfaceFormatKHR)
 }
 
 pub fn deinit(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device) void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var ikb: *rhi.vulkan.vk.InstanceWrapper = &renderer.backend.vk.ikb;
         for (self.backend.vk.signal_semaphores) |sem| {
@@ -169,20 +169,20 @@ pub const NextImageResult = struct { image_index: u32, backend: union {
 } };
 
 pub fn acquire_next_image(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device) !u32 {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         self.backend.vk.signal_idx = (self.backend.vk.signal_idx + 1) % @as(u32, @intCast(self.backend.vk.signal_semaphores.len));
         const res = try dkb.acquireNextImageKHR(device.backend.vk.device, self.backend.vk.swapchain, std.math.maxInt(u64), self.backend.vk.signal_semaphores[self.backend.vk.signal_idx], .null_handle);
         return res.image_index;
-    } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
-    return error.UnsupportedBackend;
+    }
+    unreachable;
 }
 
 pub fn resize(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, width: u16, height: u16) !bool {
     if (width == self.width and height == self.height) {
         return false;
     }
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const old_swapchain = self.backend.vk.swapchain;
         var swapchain_create_info = vk_wapchain_create_info_khr_default(.{
@@ -245,7 +245,6 @@ pub fn resize(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, wi
         self.backend.vk.views = image_views;
         self.width = width;
         self.height = height;
-
         return true;
     }
     unreachable;
@@ -255,7 +254,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
     format: SwapchainFormat = .bt709_g22_8bit,
     image_count: u32 = 3,
 }) !Swapchain {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var ikb: *rhi.vulkan.vk.InstanceWrapper = &renderer.backend.vk.ikb;
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const surface: rhi.vulkan.vk.SurfaceKHR = if (builtin.os.tag == .windows) {} else if (builtin.os.tag == .linux) p: {

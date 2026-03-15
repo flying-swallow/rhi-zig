@@ -16,6 +16,7 @@ pub const Context = struct {
     graphics_cmd_ring: CmdRingBuffer = undefined,
     pipeline: rhi.vulkan.vk.Pipeline = undefined,
     layout: rhi.vulkan.vk.PipelineLayout = undefined,
+
 };
 
 fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.sdl.SDL_AppResult {
@@ -183,7 +184,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
-fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror!sdl_app.sdl.SDL_AppResult {
+fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) !sdl_app.sdl.SDL_AppResult {
     _ = argv;
     var cntx: *Context = &app_context.inner;
     if (sdl_app.sdl.SDL_SetAppMetadata("Tabletop", "0.0.0", "tabletop") == false) {

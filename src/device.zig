@@ -10,7 +10,7 @@ compute_queue: ?rhi.Queue,
 transfer_queue: ?rhi.Queue,
 adapter: rhi.PhysicalAdapter,
 backend: union {
-    vk: rhi.wrapper_platform_type(.vk, struct {
+    vk: if (rhi.platform_has_api(.vk)) struct {
         maintenance_5_feature_enabled: bool,
         conservative_raster_tier: bool,
         swapchain_mutable_format: bool,
@@ -18,9 +18,9 @@ backend: union {
         device: rhi.vulkan.vk.Device,
         vma_allocator: vma.c.VmaAllocator,
         dkb: rhi.vulkan.vk.DeviceWrapper,
-    }),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    } else void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
 } = undefined,
 
 fn supports_extension(extensions: [][*:0]const u8, value: []const u8) bool {

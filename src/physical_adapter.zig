@@ -24,7 +24,7 @@ pub const AdapterType = enum(u8) {
 
 pub const PhysicalAdapter = @This();
 backend: union {
-    vk: rhi.wrapper_platform_type(.vk, struct {
+    vk: if (rhi.platform_has_api(.vk)) struct {
         physical_device: rhi.vulkan.vk.PhysicalDevice = .null_handle,
         api_version: u32 = 0,
         is_swap_chain_supported: bool = false,
@@ -32,9 +32,9 @@ backend: union {
         is_amd_device_coherent_memory_supported: bool = false,
         is_present_id_supported: bool = false,
         is_maintenance5_supported: bool = false,
-    }),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    } else void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
 },
 name: [256]u8 = std.mem.zeroes([256]u8),
 luid: u64 = 0,
@@ -228,7 +228,7 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
         for (physicalDeviceProperties) |*p| {
             p.* = .{
                 .physical_device_count = 0,
-                .physical_devices = undefined, 
+                .physical_devices = undefined,
                 .subset_allocation = .false,
             };
         }

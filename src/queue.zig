@@ -3,20 +3,23 @@ const std = @import("std");
 pub const Queue = @This();
 
 backend: union {
-    vk: rhi.wrapper_platform_type(.vk, struct { queue_flags: rhi.vulkan.vk.QueueFlags = .{}, family_index: u32 = 0, slot_index: u32 = 0, queue: rhi.vulkan.vk.Queue = .null_handle }),
-    dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    vk: if (rhi.platform_has_api(.vk))
+        struct { queue_flags: rhi.vulkan.vk.QueueFlags = .{}, family_index: u32 = 0, slot_index: u32 = 0, queue: rhi.vulkan.vk.Queue = .null_handle }
+    else
+        void,
+    dx12: if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
 },
 
 pub fn submit(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
-    vk: ?rhi.wrapper_platform_type(.vk, struct {
+    vk: ?if (rhi.platform_has_api(.vk)) struct {
         wait_semaphores: []const rhi.vulkan.vk.Semaphore,
         mask_wait_stages: []const rhi.vulkan.vk.PipelineStageFlags,
         signal_semaphores: []const rhi.vulkan.vk.Semaphore,
         cmds: []const *rhi.Cmd,
-    }),
-    dx12: ?rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: ?rhi.wrapper_platform_type(.mtl, struct {}),
+    } else void,
+    dx12: ?if (rhi.platform_has_api(.dx12)) void else void,
+    mtl: ?if (rhi.platform_has_api(.mtl)) void else void,
 }) void {
     if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         std.debug.assert(options.vk != null);
