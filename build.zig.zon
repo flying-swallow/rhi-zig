@@ -18,8 +18,8 @@
             .hash = "sdl-0.2.6+3.2.20-7uIn9NgjfwHH5a6HhyLHat2nHU3OP5B05QHhKJKuxEex",
         },
         .vulkan = .{
-            .url = "git+https://github.com/flying-swallow/vulkan-zig.git#cab23a834860368e0df29dc0923433a5cee78f2e",
-            .hash = "vulkan-0.0.0-r7Ytx9BnAwBUrPOrbx3zwJqVUpSjNKzOLBaxaNj6tUU-",
+            .url = "git+https://github.com/flying-swallow/vulkan-zig.git#3adbeefbc833c12656791d304b37a6315b357745",
+            .hash = "vulkan-0.0.0-r7YtxyBsAwD35FvkFhT2xruTNdCByD3TtGw44XWtfun8",
         },
         .zla = .{
             .url = "git+https://github.com/flying-swallow/zig-linear-algebra.git#02ae65d4235e8db9f9a54c68506bc952afbdcad6",

@@ -201,6 +201,29 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         //    }
         //}
 
+        fn deinit_command_group(self: *Self, group: *TransferCommandGroup, renderer: *rhi.Renderer) void {
+            var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
+            for (group.temporary_buffers.items[0..]) |*buf| {
+                buf.deinit(renderer, self.device);
+            }
+            for (0..config.max_sets) |i| {
+                group.cmd[i].deinit(renderer, self.device, &group.pool[i]);
+                group.pool[i].deinit(renderer, self.device);
+            }
+            for(group.staging_buffer[0..]) |*buf| {
+                buf.deinit(renderer, self.device);
+            }
+            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+                for(group.backend.vk.semaphores) |sem| {
+                    dkb.destroySemaphore(self.device.backend.vk.device, sem, null);
+                }
+                for(group.backend.vk.fences) |fen| {
+                    dkb.destroyFence(self.device.backend.vk.device, fen, null);
+                }
+
+            }
+            group.temporary_buffers.deinit(self.allocator);   
+        }
         fn init_resource_copy_queue(renderer: *rhi.Renderer, queue: *rhi.Queue, device: *rhi.Device) !TransferCommandGroup {
             var staging_buffer: [config.max_sets]rhi.Buffer = undefined;
 
@@ -267,7 +290,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         }
 
         pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.Device) !Self {
-            var res = Self{
+            var res = Self {
                 .allocator = allocator,
                 .device = device,
             };
@@ -372,8 +395,15 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         //    _ = try std.Thread.spawn(.{ .allocator = self.allocator }, Self.upload_thread, self);
         //}
 
-        pub fn deinit(self: *Self) void {
-            _ = self;
+
+        pub fn deinit(self: *Self, renderer: *rhi.Renderer) void {
+            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+                self.deinit_command_group(&self.upload_resource, renderer);
+                self.deinit_command_group(&self.copy_resource, renderer);
+                //self.upload_queue.deinit(self.allocator);
+                return;
+            }
+            unreachable;
         }
 
         //fn upload_thread(self: *Self) void {
@@ -390,6 +420,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                 try self.resource_mutex.lock(io);
                 defer self.resource_mutex.unlock(io);
+                _ = try self.acquire_cmd(renderer, &self.upload_resource);
                 transaction.mapped = res: {
                     if (allocate_from_stage_buffer(&self.upload_resource, transaction.size, 4)) |s| {
                         break :res s;
@@ -412,7 +443,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                 try self.resource_mutex.lock(io);
                 defer self.resource_mutex.unlock(io);
                 var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
-                var cmd = try self.acquire_cmd(renderer, &self.upload_resource);
+                const cmd = try self.acquire_cmd(renderer, &self.upload_resource);
                 dkb.cmdCopyBuffer(
                     cmd.backend.vk.cmd,
                     transaction.mapped.buffer.backend.vk.buffer,
@@ -432,6 +463,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
                 self.resource_mutex.lock();
                 defer self.resource_mutex.unlock();
+                _ = try self.acquire_cmd(renderer, &self.upload_resource);
                 transaction.mapped = res: {
                     if (allocate_from_stage_buffer(&self.upload_resource, transaction.align_slice_pitch, 4)) |s| {
                         break :res s;
@@ -477,7 +509,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                 self.resource_mutex.lock();
                 defer self.resource_mutex.unlock();
                 var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
-                var cmd = self.acquire_cmd(renderer, &self.upload_resource);
+                const cmd = self.acquire_cmd(renderer, &self.upload_resource);
                 dkb.cmdCopyBufferToImage(cmd.backend.vk.cmd, 
                     transaction.mapped.buffer.backend.vk.buffer, 
                     transaction.target.backend.vk.image, 

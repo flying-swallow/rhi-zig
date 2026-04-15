@@ -83,15 +83,15 @@ pub fn build(b: *std.Build) !void {
         .{ .glsl = "fullscreen.vert" },
     };
 
-    //const asset_02 = [_] Asset {
-    //    .{ .glsl =  "02_mesh.vert" },
-    //    .{ .glsl =  "02_mesh.frag" },
-    //};
+    const asset_02 = [_]Asset{
+        .{ .glsl = "02_mesh.vert" },
+        .{ .glsl = "02_mesh.frag" },
+    };
 
     const examples = [_]struct { file: []const u8, name: []const u8, assets: []const Asset = &.{} }{
         .{ .file = "examples/00Clear.zig", .name = "00_clear" },
         .{ .file = "examples/01Shader.zig", .name = "01_shader", .assets = assets_shader_01[0..] },
-        .{ .file = "examples/02Mesh.zig", .name = "02_mesh" }, //, .assets = asset_02[0..] },
+        .{ .file = "examples/02Mesh.zig", .name = "02_mesh", .assets = asset_02[0..] },
     };
     for (examples) |example| {
         const exe = b.addExecutable(.{

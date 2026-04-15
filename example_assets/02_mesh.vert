@@ -1,13 +1,36 @@
 #version 440
-/// Copyright 2023 Michael Pollind
+
 layout(location = 0) in vec3 a_pos;
+layout(location = 0) out vec3 v_color;
 
-layout(location = 0) out vec2 v_pos;
+layout(push_constant) uniform PushConsts {
+    float time;
+} pc;
 
-void main(void)
-{
-    v_uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
-    gl_Position = vec4(v_uv * vec2(2, -2) + vec2(-1, 1), 0, 1.0);
+mat4 rotateY(float angle) {
+    float c = cos(angle);
+    float s = sin(angle);
+    return mat4(
+        c, 0, s, 0,
+        0, 1, 0, 0,
+        -s, 0, c, 0,
+        0, 0, 0, 1
+    );
 }
 
+mat4 rotateX(float angle) {
+    float c = cos(angle);
+    float s = sin(angle);
+    return mat4(
+        1, 0, 0, 0,
+        0, c, -s, 0,
+        0, s, c, 0,
+        0, 0, 0, 1
+    );
+}
 
+void main() {
+    v_color = a_pos + vec3(0.5);
+    mat4 model = rotateY(pc.time) * rotateX(pc.time * 0.7);
+    gl_Position = model * vec4(a_pos * 0.5, 1.0);
+}

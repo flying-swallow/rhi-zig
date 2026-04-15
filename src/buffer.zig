@@ -114,6 +114,17 @@ pub fn init_general(
     unreachable;
 }
 
+pub fn deinit(self: *Buffer, renderer: *rhi.Renderer, device: *rhi.Device) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        vma.c.vmaDestroyBuffer(
+            device.backend.vk.vma_allocator,
+            @ptrFromInt(@intFromEnum(self.backend.vk.buffer)), self.backend.vk.allocation);
+        return;
+    } 
+    unreachable;
+   
+}
+
 //pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
 //    size: usize,
 //    stride: usize,

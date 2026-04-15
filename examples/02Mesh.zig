@@ -17,6 +17,8 @@ pub const Context = struct {
     resource_loader: ResourceLoader = undefined,
     dirty_resize: bool = false,
     graphics_cmd_ring: CmdRingBuffer = undefined,
+    pipeline: rhi.vulkan.vk.Pipeline = undefined,
+    layout: rhi.vulkan.vk.PipelineLayout = undefined,
 
     cube_vertex_buffer: rhi.Buffer = undefined,
     cube_index_buffer: rhi.Buffer = undefined,
@@ -130,9 +132,17 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
             }};
             dkb.cmdSetViewport(ring_element.cmds[0].backend.vk.cmd, 0, &viewport);
             dkb.cmdSetScissor(ring_element.cmds[0].backend.vk.cmd, 0, &scissor_rect);
-            //dkb.cmdBindPipeline(ring_element.cmds[0].backend.vk.cmd, .graphics, cntx.pipeline);
-            //dkb.cmdDraw(ring_element.cmds[0].backend.vk.cmd, 3, 1, 0, 0);
+            dkb.cmdBindPipeline(ring_element.cmds[0].backend.vk.cmd, .graphics, cntx.pipeline);
 
+            const vertex_buffers = [_]rhi.vulkan.vk.Buffer{cntx.cube_vertex_buffer.backend.vk.buffer};
+            const offsets = [_]rhi.vulkan.vk.DeviceSize{0};
+            dkb.cmdBindVertexBuffers(ring_element.cmds[0].backend.vk.cmd, 0, &vertex_buffers, &offsets);
+            dkb.cmdBindIndexBuffer(ring_element.cmds[0].backend.vk.cmd, cntx.cube_index_buffer.backend.vk.buffer, 0, .uint16);
+           
+            const time_f32: f32 = @floatCast(@as(f64, @floatFromInt(std.Io.Clock.real.now(app_context.io).toMilliseconds())) / 1000.0);
+            const pc_bytes = std.mem.asBytes(&time_f32);
+            dkb.cmdPushConstants(ring_element.cmds[0].backend.vk.cmd, cntx.layout, .{ .vertex_bit = true }, 0, @intCast(pc_bytes.len), pc_bytes.ptr);
+            dkb.cmdDrawIndexed(ring_element.cmds[0].backend.vk.cmd, 36, 1, 0, 0, 0);
             dkb.cmdEndRendering(ring_element.cmds[0].backend.vk.cmd);
 
             {
@@ -168,7 +178,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
                 .device_mask = 0,
             }};
 
-            var flush = try cntx.resource_loader.VKFlushResourceUpdate(app_context.io, &cntx.renderer, &.{});
+            const flush = try cntx.resource_loader.VKFlushResourceUpdate(app_context.io, &cntx.renderer, &.{});
             var semaphore_buf: [2]rhi.vulkan.vk.SemaphoreSubmitInfo = undefined;
             var wait_semaphore_info: std.ArrayList(rhi.vulkan.vk.SemaphoreSubmitInfo) = .initBuffer(&semaphore_buf);
             wait_semaphore_info.appendAssumeCapacity(.{
@@ -195,7 +205,14 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
                 .device_index = 0,
             }};
 
-            var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ .p_command_buffer_infos = cmd_submit[0..].ptr, .command_buffer_info_count = cmd_submit.len, .p_wait_semaphore_infos = wait_semaphore_info.items[0..].ptr, .wait_semaphore_info_count = @intCast(wait_semaphore_info.items.len), .p_signal_semaphore_infos = semaphore_info[0..].ptr, .signal_semaphore_info_count = semaphore_info.len }};
+            var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{ 
+                .p_command_buffer_infos = cmd_submit[0..].ptr, 
+                .command_buffer_info_count = cmd_submit.len, 
+                .p_wait_semaphore_infos = wait_semaphore_info.items[0..].ptr, 
+                .wait_semaphore_info_count = @intCast(wait_semaphore_info.items.len), 
+                .p_signal_semaphore_infos = semaphore_info[0..].ptr, 
+                .signal_semaphore_info_count = semaphore_info.len 
+            }};
             std.debug.assert(try dkb.getFenceStatus(cntx.device.backend.vk.device, ring_element.backend.vk.fence) == .success);
             const reset_fence = [_]rhi.vulkan.vk.Fence{ring_element.backend.vk.fence};
             _ = try dkb.resetFences(cntx.device.backend.vk.device, reset_fence[0..]);
@@ -248,17 +265,6 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
     cntx.dirty_resize = false;
     cntx.resource_loader = try ResourceLoader.init(app_context.gpa, &cntx.renderer, &cntx.device);
     {
-        var cube_bytes = std.mem.asBytes(&cube_mesh);
-        var transaction: rhi.resource_loader.BufferTransaction = .{ .target = &cntx.cube_vertex_buffer, .offset = 0, .size = cube_bytes.len };
-        cntx.cube_vertex_buffer = try .init_general(&cntx.renderer, &cntx.device, .{
-            .size = cube_bytes.len,
-            .usage = .{ .vertex_buffer = true },
-        });
-        try cntx.resource_loader.begin_copy_buffer(app_context.io, &cntx.renderer, &transaction);
-        @memcpy(transaction.mapped.memory_range[0..cube_bytes.len], cube_bytes[0..]);
-        try cntx.resource_loader.end_copy_buffer(app_context.io, &cntx.renderer, &transaction);
-    }
-    {
         var index_bytes = std.mem.asBytes(&cube_index);
         cntx.cube_index_buffer = try .init_general(&cntx.renderer, &cntx.device, .{
             .size = index_bytes.len,
@@ -269,6 +275,187 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
         @memcpy(transation.mapped.memory_range[0..index_bytes.len], index_bytes[0..]);
         try cntx.resource_loader.end_copy_buffer(app_context.io, &cntx.renderer, &transation);
     }
+    {
+        var cube_bytes = std.mem.asBytes(&cube_mesh);
+        cntx.cube_vertex_buffer = try .init_general(&cntx.renderer, &cntx.device, .{
+            .size = cube_bytes.len,
+            .stride = @sizeOf(f32), 
+            .usage = .{ .vertex_buffer = true },
+        });
+        var transaction: rhi.resource_loader.BufferTransaction = .{ .target = &cntx.cube_vertex_buffer, .offset = 0, .size = cube_bytes.len };
+        try cntx.resource_loader.begin_copy_buffer(app_context.io, &cntx.renderer, &transaction);
+        @memcpy(transaction.mapped.memory_range[0..cube_bytes.len], cube_bytes[0..]);
+        try cntx.resource_loader.end_copy_buffer(app_context.io, &cntx.renderer, &transaction);
+    }
+
+    const mesh_vs = std.Io.Dir.cwd().readFileAllocOptions(app_context.io, "example_assets/02_mesh.vert.spv", app_context.gpa, .unlimited, .@"4", null) catch |err| {
+        std.log.err("Failed to open vertex file: {}", .{err});
+        return err;
+    };
+    defer app_context.gpa.free(mesh_vs);
+
+    const mesh_fs = std.Io.Dir.cwd().readFileAllocOptions(app_context.io, "example_assets/02_mesh.frag.spv", app_context.gpa, .unlimited, .@"4", null) catch |err| {
+        std.log.err("Failed to open fragment file: {}", .{err});
+        return err;
+    };
+    defer app_context.gpa.free(mesh_fs);
+
+    var dkb: *rhi.vulkan.vk.DeviceWrapper = &cntx.device.backend.vk.dkb;
+    var shader_module_create_vs: rhi.vulkan.vk.ShaderModuleCreateInfo = .{
+        .code_size = mesh_vs.len,
+        .p_code = @ptrCast(mesh_vs.ptr),
+    };
+    const vs_module = dkb.createShaderModule(cntx.device.backend.vk.device, &shader_module_create_vs, null) catch |err| {
+        std.log.err("Failed to create vertex shader module: {}", .{err});
+        return err;
+    };
+    defer dkb.destroyShaderModule(cntx.device.backend.vk.device, vs_module, null);
+
+    var shader_module_create_fs: rhi.vulkan.vk.ShaderModuleCreateInfo = .{
+        .code_size = mesh_fs.len,
+        .p_code = @ptrCast(mesh_fs.ptr),
+    };
+    const fs_module = dkb.createShaderModule(cntx.device.backend.vk.device, &shader_module_create_fs, null) catch |err| {
+        std.log.err("Failed to create fragment shader module: {}", .{err});
+        return err;
+    };
+    defer dkb.destroyShaderModule(cntx.device.backend.vk.device, fs_module, null);
+
+    var stages = [_]rhi.vulkan.vk.PipelineShaderStageCreateInfo{ .{
+        .stage = .{ .vertex_bit = true },
+        .module = vs_module,
+        .p_name = "main",
+    }, .{
+        .stage = .{ .fragment_bit = true },
+        .module = fs_module,
+        .p_name = "main",
+    } };
+
+    var color_attachment_desc = [_]rhi.vulkan.vk.PipelineColorBlendAttachmentState{.{
+        .blend_enable = .true,
+        .src_color_blend_factor = .one,
+        .dst_color_blend_factor = .zero,
+        .color_blend_op = .add,
+        .src_alpha_blend_factor = .one,
+        .dst_alpha_blend_factor = .zero,
+        .alpha_blend_op = .add,
+        .color_write_mask = .{
+            .r_bit = true,
+            .g_bit = true,
+            .b_bit = true,
+        },
+    }};
+
+    var dynamic_states = [_]rhi.vulkan.vk.DynamicState{
+        .viewport,
+        .scissor,
+    };
+    var dynamic_state: rhi.vulkan.vk.PipelineDynamicStateCreateInfo = .{
+        .dynamic_state_count = dynamic_states.len,
+        .p_dynamic_states = &dynamic_states,
+    };
+    var pipeline_blend_state: rhi.vulkan.vk.PipelineColorBlendStateCreateInfo = .{
+        .logic_op_enable = .false,
+        .logic_op = .clear,
+        .blend_constants = .{ 0.0, 0.0, 0.0, 0.0 },
+        .attachment_count = color_attachment_desc.len,
+        .p_attachments = &color_attachment_desc,
+    };
+    var viewport_state: rhi.vulkan.vk.PipelineViewportStateCreateInfo = .{
+        .viewport_count = 1,
+        .scissor_count = 1,
+    };
+    var rasterization_state: rhi.vulkan.vk.PipelineRasterizationStateCreateInfo = .{
+        .depth_clamp_enable = .false,
+        .rasterizer_discard_enable = .false,
+        .polygon_mode = .fill,
+        .cull_mode = .{
+            .front_bit = false,
+            .back_bit = false,
+        },
+        .front_face = .clockwise,
+        .depth_bias_constant_factor = 0.0,
+        .depth_bias_slope_factor = 0.0,
+        .depth_bias_clamp = 0.0,
+        .depth_bias_enable = .false,
+        .line_width = 1.0,
+    };
+    var pipeline_input_assembly = rhi.vulkan.vk.PipelineInputAssemblyStateCreateInfo{
+        .topology = .triangle_list,
+        .primitive_restart_enable = .false,
+    };
+    var multisample_state = rhi.vulkan.vk.PipelineMultisampleStateCreateInfo{
+        .rasterization_samples = .{ .@"1_bit" = true },
+        .sample_shading_enable = .false,
+        .min_sample_shading = 1.0,
+        .p_sample_mask = null,
+        .alpha_to_coverage_enable = .false,
+        .alpha_to_one_enable = .false,
+    };
+
+    var vertex_binding_descriptions = [_]rhi.vulkan.vk.VertexInputBindingDescription{.{
+        .binding = 0,
+        .stride = @sizeOf(f32) * 3,
+        .input_rate = .vertex,
+    }};
+    var vertex_attribute_descriptions = [_]rhi.vulkan.vk.VertexInputAttributeDescription{.{
+        .location = 0,
+        .binding = 0,
+        .format = .r32g32b32_sfloat,
+        .offset = 0,
+    }};
+
+    var vertex_input_state = rhi.vulkan.vk.PipelineVertexInputStateCreateInfo{
+        .vertex_binding_description_count = 1,
+        .p_vertex_binding_descriptions = &vertex_binding_descriptions,
+        .vertex_attribute_description_count = 1,
+        .p_vertex_attribute_descriptions = &vertex_attribute_descriptions,
+    };
+
+    var push_constant_range = [_] rhi.vulkan.vk.PushConstantRange{
+        .{
+            .stage_flags = .{ .vertex_bit = true },
+            .offset = 0,
+            .size = @sizeOf(f32),
+        }
+    };
+
+    var pipeline_layout_info = rhi.vulkan.vk.PipelineLayoutCreateInfo{
+        .set_layout_count = 0,
+        .push_constant_range_count = 1,
+        .p_push_constant_ranges = &push_constant_range,
+    };
+
+    cntx.layout = try dkb.createPipelineLayout(cntx.device.backend.vk.device, &pipeline_layout_info, null);
+    errdefer dkb.destroyPipelineLayout(cntx.device.backend.vk.device, cntx.layout, null);
+
+    var pipeline_create_info = [1]rhi.vulkan.vk.GraphicsPipelineCreateInfo{.{
+        .stage_count = stages.len,
+        .p_stages = &stages,
+        .subpass = 0,
+        .layout = cntx.layout,
+        .base_pipeline_index = -1,
+        .p_color_blend_state = &pipeline_blend_state,
+        .p_rasterization_state = &rasterization_state,
+        .p_multisample_state = &multisample_state,
+        .p_vertex_input_state = &vertex_input_state,
+        .p_viewport_state = &viewport_state,
+        .p_input_assembly_state = &pipeline_input_assembly,
+        .p_dynamic_state = &dynamic_state,
+    }};
+    var color_attachments = [_]rhi.vulkan.vk.Format{cntx.swapchain.backend.vk.format};
+    var pipeline_render_info: rhi.vulkan.vk.PipelineRenderingCreateInfo = .{
+        .color_attachment_count = color_attachments.len,
+        .p_color_attachment_formats = &color_attachments,
+        .view_mask = 0,
+        .depth_attachment_format = .undefined,
+        .stencil_attachment_format = .undefined,
+    };
+    rhi.vulkan.add_next(&pipeline_create_info[0], &pipeline_render_info);
+    var pipelines: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
+    _ = try dkb.createGraphicsPipelines(cntx.device.backend.vk.device, .null_handle, &pipeline_create_info, null, &pipelines);
+    cntx.pipeline = pipelines[0];
+
     return sdl_app.sdl.SDL_APP_CONTINUE;
 }
 
@@ -278,6 +465,13 @@ fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_A
         std.log.err("Failed to wait graphics queue idle: {}", .{err});
     };
 
+    var dkb: *rhi.vulkan.vk.DeviceWrapper = &cntx.device.backend.vk.dkb;
+    dkb.destroyPipeline(cntx.device.backend.vk.device, cntx.pipeline, null);
+    dkb.destroyPipelineLayout(cntx.device.backend.vk.device, cntx.layout, null);
+
+    cntx.resource_loader.deinit(&cntx.renderer);
+    cntx.cube_vertex_buffer.deinit(&cntx.renderer, &cntx.device);
+    cntx.cube_index_buffer.deinit(&cntx.renderer, &cntx.device);
     cntx.graphics_cmd_ring.deinit(&cntx.renderer, &cntx.device);
     cntx.swapchain.deinit(&cntx.renderer, &cntx.device);
     cntx.device.deinit(&cntx.renderer);

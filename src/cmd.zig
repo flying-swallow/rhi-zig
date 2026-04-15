@@ -157,6 +157,15 @@ pub const Pool = struct {
         unreachable;
     }
 
+    pub fn deinit(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device) void {
+        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+            var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+            dkb.destroyCommandPool(device.backend.vk.device, self.backend.vk.pool, null);
+            return;
+        }
+        unreachable;
+    }
+
     pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, queue: *rhi.Queue) !Self {
         if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
