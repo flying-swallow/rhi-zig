@@ -16,7 +16,6 @@ pub const Context = struct {
     graphics_cmd_ring: CmdRingBuffer = undefined,
     pipeline: rhi.vulkan.vk.Pipeline = undefined,
     layout: rhi.vulkan.vk.PipelineLayout = undefined,
-
 };
 
 fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.sdl.SDL_AppResult {

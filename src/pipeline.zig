@@ -315,7 +315,7 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
     };
 
     for (desc.output_merger.color_attachments) |attachment| {
-        color_attachment_formats.append(alloc, rhi.vulkan.vk_format(attachment.format));
+        color_attachment_formats.append(alloc, rhi.vulkan.to_vk_format(attachment.format));
         try color_blend_attachments.append(alloc, .{
             .blend_enable = if (attachment.blend_enable) .true else .false,
             .src_color_blend_factor = attachment.src_color_blend_factor.to_vk(),
@@ -363,7 +363,7 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
             try attribute_descriptions.append(alloc, .{
                 .location = attribute.vk.location,
                 .binding = attribute.streamIndex,
-                .format = rhi.vulkan.vk_format(attribute.format),
+                .format = rhi.vulkan.to_vk_format(attribute.format),
                 .offset = attribute.offset,
             });
         }

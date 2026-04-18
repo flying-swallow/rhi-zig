@@ -21,6 +21,7 @@ pub const pipeline = @import("pipeline.zig");
 pub const resource_loader = @import("resource_loader.zig");
 pub const shader = @import("shader.zig");
 pub const semaphore = @import("semaphore.zig");
+pub const scratch_alloc = @import("scratch_alloc.zig");
 
 pub const Renderer = renderer.Renderer;
 pub const PhysicalAdapter = physical_adapter.PhysicalAdapter;
@@ -41,6 +42,9 @@ pub const Pipeline = pipeline.Pipeline;
 pub const PipelineLayout = pipeline_layout.PipelineLayout;
 pub const Shader = shader.Shader;
 pub const Semaphore = semaphore.Semaphore;
+pub const ScratchAlloc = scratch_alloc.ScratchAlloc;
+pub const ScratchAllocBlockMem = scratch_alloc.BlockMem;
+pub const ScratchAllocReq = scratch_alloc.AllocReq;
 pub const TimeKeeper = @import("time_keeper.zig");
 
 pub const Selection = enum { default, vk, dx12, mtl };
