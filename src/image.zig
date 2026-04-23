@@ -24,6 +24,123 @@ pub const ImageView = union {
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 };
 
+pub fn init(
+    renderer: *rhi.Renderer,
+    device: *rhi.Device,
+    options: struct {
+        image_type: enum { type_1d, type_2d, type_3d } = .type_2d,
+        format: rhi.Format,
+        width: u32,
+        height: u32 = 1,
+        depth: u32 = 1,
+        mip_levels: u32 = 1,
+        array_layers: u32 = 1,
+        samples: enum { @"1", @"2", @"4", @"8", @"16", @"32", @"64" } = .@"1",
+        tiling: enum { optimal, linear } = .optimal,
+        usage: struct {
+            transfer_src: bool = false,
+            transfer_dst: bool = false,
+            sampled: bool = false,
+            storage: bool = false,
+            color_attachment: bool = false,
+            depth_stencil_attachment: bool = false,
+            transient_attachment: bool = false,
+            input_attachment: bool = false,
+        },
+        memory_usage: enum { auto, prefer_device, prefer_host } = .auto,
+    },
+) !Image {
+    if (rhi.is_target_selected(.vk, renderer)) {
+        // zig fmt: off
+        const usage = rhi.vulkan.vk.ImageUsageFlags{
+            .transfer_src_bit = options.usage.transfer_src,
+            .transfer_dst_bit = options.usage.transfer_dst,
+            .sampled_bit = options.usage.sampled,
+            .storage_bit = options.usage.storage,
+            .color_attachment_bit = options.usage.color_attachment,
+            .depth_stencil_attachment_bit = options.usage.depth_stencil_attachment,
+            .transient_attachment_bit = options.usage.transient_attachment,
+            .input_attachment_bit = options.usage.input_attachment,
+        };
+        // zig fmt: on
+
+        var image_create_info: rhi.vulkan.vk.ImageCreateInfo = .{
+            .image_type = switch (options.image_type) {
+                .type_1d => .type_1d,
+                .type_2d => .type_2d,
+                .type_3d => .type_3d,
+            },
+            .format = rhi.vulkan.to_vk_format(options.format),
+            .extent = .{ .width = options.width, .height = options.height, .depth = options.depth },
+            .mip_levels = options.mip_levels,
+            .array_layers = options.array_layers,
+            .samples = switch (options.samples) {
+                .@"1" => .{ .@"1_bit" = true },
+                .@"2" => .{ .@"2_bit" = true },
+                .@"4" => .{ .@"4_bit" = true },
+                .@"8" => .{ .@"8_bit" = true },
+                .@"16" => .{ .@"16_bit" = true },
+                .@"32" => .{ .@"32_bit" = true },
+                .@"64" => .{ .@"64_bit" = true },
+            },
+            .tiling = switch (options.tiling) {
+                .optimal => .optimal,
+                .linear => .linear,
+            },
+            .usage = usage,
+            .sharing_mode = .exclusive,
+            .initial_layout = .undefined,
+        };
+
+        var allocation_info: vma.c.VmaAllocationCreateInfo = .{};
+        allocation_info.usage = switch (options.memory_usage) {
+            .prefer_device => vma.c.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .prefer_host => vma.c.VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+            .auto => vma.c.VMA_MEMORY_USAGE_AUTO,
+        };
+
+        var vma_info = vma.c.VmaAllocationInfo{};
+        var vk_image: vma.c.VkImage = undefined;
+        var vma_alloc: vma.c.VmaAllocation = undefined;
+
+        // zig fmt: off
+        try rhi.vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateImage(
+            device.backend.vk.vma_allocator,
+            @ptrCast(&image_create_info),
+            &allocation_info,
+            &vk_image,
+            &vma_alloc,
+            &vma_info,
+        )));
+        // zig fmt: on
+
+        return .{
+            .backend = .{ .vk = .{
+                .image = @enumFromInt(@intFromPtr(vk_image)),
+                .allocation = vma_alloc,
+            } },
+        };
+    }
+    unreachable;
+}
+
+pub fn deinit(self: *Image, renderer: *rhi.Renderer, device: *rhi.Device) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        if (self.backend.vk.allocation) |alloc| {
+            vma.c.vmaDestroyImage(
+                device.backend.vk.vma_allocator,
+                @ptrFromInt(@intFromEnum(self.backend.vk.image)),
+                alloc,
+            );
+        } else {
+            var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+            dkb.destroyImage(device.backend.vk.device, self.backend.vk.image, null);
+        }
+        return;
+    }
+    unreachable;
+}
+
 
 //pub fn barrier(self: *Image, comptime selection: rhi.Backend, renderer: *rhi.Renderer, options: struct {
 //    const AccessLayoutStage = struct {

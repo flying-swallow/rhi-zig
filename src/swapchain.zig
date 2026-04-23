@@ -53,6 +53,7 @@ backend: union {
         surface: rhi.vulkan.vk.SurfaceKHR,
         images: []rhi.vulkan.vk.Image,
         views: []rhi.vulkan.vk.ImageView,
+
         signal_idx: u32 = 0,
         signal_semaphores: []rhi.vulkan.vk.Semaphore,
 
