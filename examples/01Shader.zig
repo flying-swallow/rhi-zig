@@ -166,17 +166,10 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
             _ = try dkb.resetFences(cntx.device.backend.vk.device, reset_fence[0..]);
             _ = try dkb.queueSubmit2(cntx.device.graphics_queue.backend.vk.queue, submit_info[0..], ring_element.backend.vk.fence);
 
-            var swapchains = [_]rhi.vulkan.vk.SwapchainKHR{cntx.swapchain.backend.vk.swapchain};
-            var image_indecies = [_]u32{swapchain_index};
-            var wait_semaphores = [_]rhi.vulkan.vk.Semaphore{ring_element.backend.vk.semaphore};
-            var present_info = rhi.vulkan.vk.PresentInfoKHR{
-                .swapchain_count = 1,
-                .p_swapchains = swapchains[0..].ptr,
-                .p_image_indices = image_indecies[0..].ptr,
-                .wait_semaphore_count = wait_semaphores.len,
-                .p_wait_semaphores = wait_semaphores[0..].ptr,
+            var wait_semaphores = [_]rhi.vulkan.vk.Semaphore{
+                 ring_element.backend.vk.semaphore 
             };
-            _ = try dkb.queuePresentKHR(cntx.device.graphics_queue.backend.vk.queue, &present_info);
+            try cntx.swapchain.present_vk(&cntx.renderer, &cntx.device, swapchain_index, &wait_semaphores);
         }
     }
     cntx.timekeeper.produce(sdl_app.sdl.SDL_GetPerformanceCounter());

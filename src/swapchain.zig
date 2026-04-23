@@ -179,6 +179,25 @@ pub fn acquire_next_image(self: *Swapchain, renderer: *rhi.Renderer, device: *rh
     unreachable;
 }
 
+pub fn present_vk(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, image_index: u32, wait_semaphores: []const rhi.vulkan.vk.Semaphore ) !void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        var swapchains = [_]rhi.vulkan.vk.SwapchainKHR{self.backend.vk.swapchain};
+        var image_indices = [_]u32{image_index};
+
+        var present_info = rhi.vulkan.vk.PresentInfoKHR{
+            .swapchain_count = 1,
+            .p_swapchains = swapchains[0..].ptr,
+            .p_image_indices = image_indices[0..].ptr,
+            .wait_semaphore_count = @intCast(wait_semaphores.len),
+            .p_wait_semaphores = wait_semaphores.ptr,
+        };
+        _ = try dkb.queuePresentKHR(self.present_queue.backend.vk.queue, &present_info);
+        return;
+    }
+    unreachable;
+}
+
 pub fn resize(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, width: u16, height: u16) !bool {
     if (width == self.width and height == self.height) {
         return false;

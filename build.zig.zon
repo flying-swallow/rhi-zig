@@ -25,6 +25,10 @@
             .url = "git+https://github.com/flying-swallow/zig-linear-algebra.git#02ae65d4235e8db9f9a54c68506bc952afbdcad6",
             .hash = "zla-0.0.2-zqm18F6nAQBFAQsYpFl_Jr0lzud3zGK6y0N1l2Djm3R_",
         },
+        .cimgui_zig = .{
+            .url = "git+https://github.com/tiawl/cimgui.zig.git#947dbb551a78427c66055da48a18a15739aab921",
+            .hash = "cimgui_zig-1.0.0-2XubkmPNvwBq2ojNgGB2nzfLhA270r2LrnmaLGt93Jmd",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },
 }
