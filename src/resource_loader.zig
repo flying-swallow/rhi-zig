@@ -47,6 +47,15 @@ pub const TextureTransaction = struct {
     align_row_pitch: u32,
     align_slice_pitch: u32,
     mapped: rhi.Buffer.MappedMemoryRange,
+
+    barrier: struct {
+        union {
+            vk:  if (rhi.platform_has_api(.vk)) struct {
+                current: rhi.vulkan.vk.ImageMemoryBarrier2,
+                post: rhi.vulkan.vk.ImageMemoryBarrier2
+            } else void
+        }
+    }
 };
 
 const ResourceJobType = enum {};
@@ -509,7 +518,15 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                 self.resource_mutex.lock();
                 defer self.resource_mutex.unlock();
                 var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.device.backend.vk.dkb;
-                const cmd = self.acquire_cmd(renderer, &self.upload_resource);
+                const cmd = try self.acquire_cmd(renderer, &self.upload_resource);
+
+                var current_barrier = [_]rhi.vulkan.vk.ImageMemoryBarrier2{transaction.barrier.vk.current};
+                var current_dependency = rhi.vulkan.vk.DependencyInfo{
+                    .image_memory_barrier_count = 1,
+                    .p_image_memory_barriers = current_barrier[0..].ptr,
+                };
+                dkb.cmdPipelineBarrier2(cmd.backend.vk.cmd, &current_dependency);
+
                 dkb.cmdCopyBufferToImage(cmd.backend.vk.cmd, 
                     transaction.mapped.buffer.backend.vk.buffer, 
                     transaction.target.backend.vk.image, 
@@ -517,6 +534,13 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                     1,
                     &image_copy
                 );
+
+                var post_barrier = [_]rhi.vulkan.vk.ImageMemoryBarrier2{transaction.barrier.vk.post};
+                var post_dependency = rhi.vulkan.vk.DependencyInfo{
+                    .image_memory_barrier_count = 1,
+                    .p_image_memory_barriers = post_barrier[0..].ptr,
+                };
+                dkb.cmdPipelineBarrier2(cmd.backend.vk.cmd, &post_dependency);
                 // zig fmt: on
                 return;
             }

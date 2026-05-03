@@ -22,6 +22,8 @@ pub const resource_loader = @import("resource_loader.zig");
 pub const shader = @import("shader.zig");
 pub const semaphore = @import("semaphore.zig");
 pub const scratch_alloc = @import("scratch_alloc.zig");
+pub const segment_alloc = @import("segment_alloc.zig");
+pub const offset_alloc = @import("offset_alloc.zig");
 
 pub const Renderer = renderer.Renderer;
 pub const PhysicalAdapter = physical_adapter.PhysicalAdapter;
@@ -45,6 +47,10 @@ pub const Semaphore = semaphore.Semaphore;
 pub const ScratchAlloc = scratch_alloc.ScratchAlloc;
 pub const ScratchAllocBlockMem = scratch_alloc.BlockMem;
 pub const ScratchAllocReq = scratch_alloc.AllocReq;
+pub const SegmentAlloc = segment_alloc.SegmentAlloc;
+pub const SegmentAllocReq = segment_alloc.Req;
+pub const OffsetAllocator = offset_alloc.Allocator;
+pub const OffsetAllocation = offset_alloc.Allocation;
 pub const TimeKeeper = @import("time_keeper.zig");
 
 pub const Selection = enum { default, vk, dx12, mtl };
