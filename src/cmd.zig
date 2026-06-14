@@ -1,5 +1,5 @@
 const rhi = @import("root.zig");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 const std = @import("std");
 
 pub const StageBits = struct {
@@ -154,6 +154,10 @@ pub const Pool = struct {
             try dkb.resetCommandPool(device.backend.vk.device, self.backend.vk.pool, .{});
             return;
         }
+        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+            // Metal has no command pools; command buffers are transient.
+            return;
+        }
         unreachable;
     }
 
@@ -161,6 +165,9 @@ pub const Pool = struct {
         if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             dkb.destroyCommandPool(device.backend.vk.device, self.backend.vk.pool, null);
+            return;
+        }
+        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
             return;
         }
         unreachable;
@@ -180,6 +187,9 @@ pub const Pool = struct {
                 .queue = queue,
                 .pool = pool,
             } } };
+        }
+        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+            return .{ .backend = .{ .mtl = {} } };
         }
         return error.UnsupportedBackend;
     }
@@ -203,6 +213,13 @@ pub const CommandRingElement = struct {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             var fences = [_]rhi.vulkan.vk.Fence{self.backend.vk.fence};
             _ = try dkb.waitForFences(device.backend.vk.device, fences[0..], .true, std.math.maxInt(u64));
+            return;
+        }
+        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+            // CPU/GPU frame pacing on Metal is provided implicitly by
+            // CAMetalLayer.nextDrawable, which blocks once the maximum number of
+            // drawables is in flight. (An MTLSharedEvent could give finer-grained
+            // overlap later.)
             return;
         }
         unreachable;
@@ -248,6 +265,18 @@ pub fn CommandRingBuffer(
                 self.cmd_index += num_cmds;
                 return result;
             }
+            if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+                std.debug.assert(num_cmds <= options.cmd_per_pool);
+                std.debug.assert(num_cmds + self.cmd_index <= options.cmd_per_pool);
+                const result = CommandRingElement{
+                    .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds],
+                    .pool = &self.pools[self.pool_index],
+                    .backend = .{ .mtl = {} },
+                };
+                self.fence_index += 1;
+                self.cmd_index += num_cmds;
+                return result;
+            }
             unreachable;
         }
         pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, queue: *rhi.Queue) !Self {
@@ -279,6 +308,17 @@ pub fn CommandRingBuffer(
                     .fences = fences,
                 } } };
             }
+            if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+                var cmds: [options.pool_count][options.cmd_per_pool]rhi.Cmd = undefined;
+                var pools: [options.pool_count]rhi.Pool = undefined;
+                for (0..options.pool_count) |pool_index| {
+                    pools[pool_index] = try rhi.Pool.init(renderer, device, queue);
+                    for (0..options.cmd_per_pool) |cmd_index| {
+                        cmds[pool_index][cmd_index] = try rhi.Cmd.init(renderer, device, &pools[pool_index]);
+                    }
+                }
+                return .{ .pool_index = options.pool_count, .cmd_index = 0, .fence_index = 0, .cmds = cmds, .pools = pools, .backend = .{ .mtl = {} } };
+            }
 
             unreachable; // should never reach here
         }
@@ -300,6 +340,14 @@ pub fn CommandRingBuffer(
                 }
                 return;
             }
+            if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+                for (0..options.pool_count) |pool_index| {
+                    for (0..options.cmd_per_pool) |cmd_index| {
+                        self.cmds[pool_index][cmd_index].deinit(renderer, device, &self.pools[pool_index]);
+                    }
+                }
+                return;
+            }
             unreachable;
         }
     };
@@ -311,7 +359,15 @@ backend: union {
         cmd: rhi.vulkan.vk.CommandBuffer,
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
-    mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    // Metal command buffers are created per-frame from the queue. The live
+    // render encoder (between begin_rendering/end_rendering) is held here too.
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        queue: rhi.metal.mtl.CommandQueue,
+        cmd: ?rhi.metal.mtl.CommandBuffer = null,
+        encoder: ?rhi.metal.mtl.RenderCommandEncoder = null,
+        index_buffer: ?rhi.metal.mtl.Buffer = null,
+        index_type: rhi.metal.types.IndexType = .uint16,
+    } else void,
 },
 
 pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, pool: *Pool) !Cmd {
@@ -328,6 +384,9 @@ pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, pool: *Pool) !Cmd {
             .cmd = command[0],
         } } };
     }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        return .{ .backend = .{ .mtl = .{ .queue = device.backend.mtl.queue } } };
+    }
     unreachable;
 }
 
@@ -338,6 +397,9 @@ pub fn deinit(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, pool: *P
             self.backend.vk.cmd,
         };
         dkb.freeCommandBuffers(device.backend.vk.device, pool.backend.vk.pool, command[0..]);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
         return;
     }
     unreachable;
@@ -355,6 +417,11 @@ pub fn begin(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) !void {
         try dkb.beginCommandBuffer(self.backend.vk.cmd, &begin_info);
         return;
     }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.cmd = self.backend.mtl.queue.commandBuffer() orelse return error.MetalCommandBufferFailed;
+        self.backend.mtl.encoder = null;
+        return;
+    }
     unreachable;
 }
 
@@ -362,6 +429,406 @@ pub fn end(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) !void {
     if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         try dkb.endCommandBuffer(self.backend.vk.cmd);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        // Commit happens in Swapchain.frame_submit.
+        return;
+    }
+    unreachable;
+}
+
+// -- Backend-agnostic render command API -----------------------------------
+//
+// These mirror what the examples used to record inline against raw Vulkan, but
+// dispatch to either backend. On Vulkan they reproduce the previous behavior
+// exactly; on Metal they drive the live MTLRenderCommandEncoder, and barriers
+// become no-ops (the render pass load/store actions handle transitions).
+
+pub const LoadOp = enum { load, clear, dont_care };
+pub const StoreOp = enum { store, dont_care };
+
+pub const Rect = struct { x: i32 = 0, y: i32 = 0, width: u32, height: u32 };
+
+pub const Viewport = struct {
+    x: f32 = 0,
+    y: f32 = 0,
+    width: f32,
+    height: f32,
+    min_depth: f32 = 0,
+    max_depth: f32 = 1,
+};
+
+pub const ColorAttachment = struct {
+    view: rhi.Image.ImageView,
+    load_op: LoadOp = .clear,
+    store_op: StoreOp = .store,
+    clear_color: [4]f32 = .{ 0, 0, 0, 1 },
+};
+
+pub const ImageBarrier = struct {
+    image: *rhi.Image,
+    old_layout: Layout,
+    new_layout: Layout,
+    aspect: enum { color, depth } = .color,
+};
+
+/// Insert image memory barriers. Real on Vulkan; a no-op on Metal. `reserve` is
+/// the stack-allocated barrier capacity (compile-time); `image_barriers.len`
+/// must not exceed it.
+pub fn pipeline_barrier(self: *Cmd, comptime reserve: usize, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+    image_barriers: []const ImageBarrier,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        if (options.image_barriers.len == 0) return;
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        std.debug.assert(options.image_barriers.len <= reserve);
+        var vk_barriers: [reserve]rhi.vulkan.vk.ImageMemoryBarrier2 = undefined;
+        for (options.image_barriers, 0..) |b, i| {
+            vk_barriers[i] = .{
+                .src_stage_mask = .{},
+                .src_access_mask = .{},
+                .dst_stage_mask = .{},
+                .dst_access_mask = .{},
+                .old_layout = vk_image_layout(b.old_layout),
+                .new_layout = vk_image_layout(b.new_layout),
+                .src_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
+                .dst_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
+                .image = b.image.backend.vk.image,
+                .subresource_range = .{
+                    .aspect_mask = switch (b.aspect) {
+                        .color => .{ .color_bit = true },
+                        .depth => .{ .depth_bit = true },
+                    },
+                    .base_mip_level = 0,
+                    .level_count = 1,
+                    .base_array_layer = 0,
+                    .layer_count = 1,
+                },
+            };
+            switch (b.new_layout) {
+                .color_attachment => {
+                    vk_barriers[i].dst_stage_mask = .{ .color_attachment_output_bit = true };
+                    vk_barriers[i].dst_access_mask = .{ .color_attachment_write_bit = true };
+                },
+                .depth_stencil_attachment => {
+                    vk_barriers[i].dst_stage_mask = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true };
+                    vk_barriers[i].dst_access_mask = .{ .depth_stencil_attachment_write_bit = true };
+                },
+                .present => {
+                    vk_barriers[i].src_stage_mask = .{ .color_attachment_output_bit = true };
+                    vk_barriers[i].src_access_mask = .{ .color_attachment_write_bit = true };
+                    vk_barriers[i].dst_stage_mask = .{ .bottom_of_pipe_bit = true };
+                },
+                else => {},
+            }
+        }
+        var dep = rhi.vulkan.vk.DependencyInfo{
+            .image_memory_barrier_count = @intCast(options.image_barriers.len),
+            .p_image_memory_barriers = &vk_barriers,
+        };
+        dkb.cmdPipelineBarrier2(self.backend.vk.cmd, &dep);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        // Metal render-pass load/store actions handle layout transitions.
+        return;
+    }
+    unreachable;
+}
+
+fn vk_image_layout(layout: Layout) rhi.vulkan.vk.ImageLayout {
+    return switch (layout) {
+        .undefined => .undefined,
+        .color_attachment => .color_attachment_optimal,
+        .depth_stencil_attachment => .depth_attachment_optimal,
+        .present => .present_src_khr,
+        else => .general,
+    };
+}
+
+pub const DepthAttachment = struct {
+    view: rhi.Image.ImageView,
+    load_op: LoadOp = .clear,
+    store_op: StoreOp = .store,
+    clear_depth: f32 = 1.0,
+};
+
+pub fn begin_rendering(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+    color_attachments: []const ColorAttachment,
+    render_area: Rect,
+    depth_attachment: ?DepthAttachment = null,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        var vk_attachments: [8]rhi.vulkan.vk.RenderingAttachmentInfo = undefined;
+        for (options.color_attachments, 0..) |att, i| {
+            vk_attachments[i] = .{
+                .image_view = att.view.vk,
+                .image_layout = .color_attachment_optimal,
+                .resolve_mode = .{},
+                .resolve_image_layout = .undefined,
+                .load_op = switch (att.load_op) {
+                    .load => .load,
+                    .clear => .clear,
+                    .dont_care => .dont_care,
+                },
+                .store_op = switch (att.store_op) {
+                    .store => .store,
+                    .dont_care => .dont_care,
+                },
+                .clear_value = .{ .color = .{ .float_32 = att.clear_color } },
+            };
+        }
+        var info = rhi.vulkan.vk.RenderingInfo{
+            .render_area = .{
+                .offset = .{ .x = options.render_area.x, .y = options.render_area.y },
+                .extent = .{ .width = options.render_area.width, .height = options.render_area.height },
+            },
+            .view_mask = 0,
+            .layer_count = 1,
+            .color_attachment_count = @intCast(options.color_attachments.len),
+            .p_color_attachments = vk_attachments[0..].ptr,
+        };
+        var depth_att: rhi.vulkan.vk.RenderingAttachmentInfo = undefined;
+        if (options.depth_attachment) |da| {
+            depth_att = .{
+                .image_view = da.view.vk,
+                .image_layout = .depth_attachment_optimal,
+                .resolve_mode = .{},
+                .resolve_image_layout = .undefined,
+                .load_op = switch (da.load_op) {
+                    .load => .load,
+                    .clear => .clear,
+                    .dont_care => .dont_care,
+                },
+                .store_op = switch (da.store_op) {
+                    .store => .store,
+                    .dont_care => .dont_care,
+                },
+                .clear_value = .{ .depth_stencil = .{ .depth = da.clear_depth, .stencil = 0 } },
+            };
+            info.p_depth_attachment = &depth_att;
+        }
+        dkb.cmdBeginRendering(self.backend.vk.cmd, &info);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        const desc = rhi.metal.mtl.RenderPassDescriptor.renderPassDescriptor();
+        for (options.color_attachments, 0..) |att, i| {
+            const ca = desc.colorAttachments().object(@intCast(i));
+            ca.setTexture(att.view.mtl);
+            ca.setLoadAction(switch (att.load_op) {
+                .load => .load,
+                .clear => .clear,
+                .dont_care => .dont_care,
+            });
+            ca.setStoreAction(switch (att.store_op) {
+                .store => .store,
+                .dont_care => .dont_care,
+            });
+            ca.setClearColor(.{ .red = att.clear_color[0], .green = att.clear_color[1], .blue = att.clear_color[2], .alpha = att.clear_color[3] });
+        }
+        if (options.depth_attachment) |da| {
+            const d = desc.depthAttachment();
+            d.setTexture(da.view.mtl);
+            d.setLoadAction(switch (da.load_op) {
+                .load => .load,
+                .clear => .clear,
+                .dont_care => .dont_care,
+            });
+            d.setStoreAction(switch (da.store_op) {
+                .store => .store,
+                .dont_care => .dont_care,
+            });
+            d.setClearDepth(da.clear_depth);
+        }
+        self.backend.mtl.encoder = self.backend.mtl.cmd.?.renderCommandEncoder(desc) orelse unreachable;
+        return;
+    }
+    unreachable;
+}
+
+pub fn end_rendering(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdEndRendering(self.backend.vk.cmd);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.encoder.?.endEncoding();
+        self.backend.mtl.encoder = null;
+        return;
+    }
+    unreachable;
+}
+
+pub fn set_viewport(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, vp: Viewport) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        var v = [_]rhi.vulkan.vk.Viewport{.{ .x = vp.x, .y = vp.y, .width = vp.width, .height = vp.height, .min_depth = vp.min_depth, .max_depth = vp.max_depth }};
+        dkb.cmdSetViewport(self.backend.vk.cmd, 0, &v);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.encoder.?.setViewport(.{ .origin_x = vp.x, .origin_y = vp.y, .width = vp.width, .height = vp.height, .znear = vp.min_depth, .zfar = vp.max_depth });
+        return;
+    }
+    unreachable;
+}
+
+pub fn set_scissor(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, rect: Rect) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        var s = [_]rhi.vulkan.vk.Rect2D{.{ .offset = .{ .x = rect.x, .y = rect.y }, .extent = .{ .width = rect.width, .height = rect.height } }};
+        dkb.cmdSetScissor(self.backend.vk.cmd, 0, &s);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.encoder.?.setScissorRect(.{ .x = @intCast(rect.x), .y = @intCast(rect.y), .width = rect.width, .height = rect.height });
+        return;
+    }
+    unreachable;
+}
+
+pub fn bind_pipeline(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, pipeline: *rhi.Pipeline) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdBindPipeline(self.backend.vk.cmd, .graphics, pipeline.backend.vk.pipeline);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.encoder.?.setRenderPipelineState(pipeline.backend.mtl.state);
+        if (pipeline.backend.mtl.depth_stencil_state) |dss| {
+            self.backend.mtl.encoder.?.setDepthStencilState(dss);
+        }
+        return;
+    }
+    unreachable;
+}
+
+pub fn draw(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+    vertex_count: u32,
+    instance_count: u32 = 1,
+    first_vertex: u32 = 0,
+    first_instance: u32 = 0,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdDraw(self.backend.vk.cmd, options.vertex_count, options.instance_count, options.first_vertex, options.first_instance);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.encoder.?.drawPrimitives(.triangle, options.first_vertex, options.vertex_count);
+        return;
+    }
+    unreachable;
+}
+
+pub fn clear_attachment_regions(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+    regions: []const struct { color: [4]f32, rect: Rect },
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        for (options.regions) |r| {
+            var clear_rect = [_]rhi.vulkan.vk.ClearRect{.{
+                .rect = .{ .offset = .{ .x = r.rect.x, .y = r.rect.y }, .extent = .{ .width = r.rect.width, .height = r.rect.height } },
+                .base_array_layer = 0,
+                .layer_count = 1,
+            }};
+            var clear_att = [_]rhi.vulkan.vk.ClearAttachment{.{
+                .aspect_mask = .{ .color_bit = true },
+                .color_attachment = 0,
+                .clear_value = .{ .color = .{ .float_32 = r.color } },
+            }};
+            dkb.cmdClearAttachments(self.backend.vk.cmd, clear_att[0..], clear_rect[0..]);
+        }
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        // Metal cannot clear sub-rects inside a pass; the begin_rendering load
+        // action already cleared the whole attachment. Per-quadrant fills would
+        // need solid-color draws (a follow-up).
+        return;
+    }
+    unreachable;
+}
+
+pub const IndexType = enum { uint16, uint32 };
+
+pub fn bind_vertex_buffer(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, buffer: *rhi.Buffer, slot: u32) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        const buffers = [_]rhi.vulkan.vk.Buffer{buffer.backend.vk.buffer};
+        const offsets = [_]rhi.vulkan.vk.DeviceSize{0};
+        dkb.cmdBindVertexBuffers(self.backend.vk.cmd, slot, &buffers, &offsets);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.encoder.?.setVertexBuffer(buffer.backend.mtl.buffer, 0, rhi.pipeline.mtl_vertex_buffer_base + slot);
+        return;
+    }
+    unreachable;
+}
+
+pub fn bind_index_buffer(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, buffer: *rhi.Buffer, index_type: IndexType) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdBindIndexBuffer(self.backend.vk.cmd, buffer.backend.vk.buffer, 0, switch (index_type) {
+            .uint16 => .uint16,
+            .uint32 => .uint32,
+        });
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.index_buffer = buffer.backend.mtl.buffer;
+        self.backend.mtl.index_type = switch (index_type) {
+            .uint16 => .uint16,
+            .uint32 => .uint32,
+        };
+        return;
+    }
+    unreachable;
+}
+
+pub fn draw_indexed(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+    index_count: u32,
+    instance_count: u32 = 1,
+    first_index: u32 = 0,
+    vertex_offset: i32 = 0,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdDrawIndexed(self.backend.vk.cmd, options.index_count, options.instance_count, options.first_index, options.vertex_offset, 0);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        const index_size: u32 = switch (self.backend.mtl.index_type) {
+            .uint16 => 2,
+            .uint32 => 4,
+        };
+        self.backend.mtl.encoder.?.drawIndexedPrimitives(
+            .triangle,
+            options.index_count,
+            self.backend.mtl.index_type,
+            self.backend.mtl.index_buffer.?,
+            options.first_index * index_size,
+        );
+        return;
+    }
+    unreachable;
+}
+
+/// Set vertex-stage push constants (Vulkan) / inline vertex bytes (Metal).
+pub fn set_push_constants(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, pipeline: *rhi.Pipeline, bytes: []const u8) void {
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdPushConstants(self.backend.vk.cmd, pipeline.backend.vk.layout, .{ .vertex_bit = true }, 0, @intCast(bytes.len), bytes.ptr);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        // slangc places the vertex push-constant block at buffer index 0.
+        self.backend.mtl.encoder.?.setVertexBytes(bytes.ptr, bytes.len, 0);
         return;
     }
     unreachable;

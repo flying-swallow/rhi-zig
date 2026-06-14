@@ -1,7 +1,7 @@
 const rhi = @import("root.zig");
-const vma = @import("vma");
+const vma = @import("root.zig").vma;
 const std = @import("std");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 const builtin = @import("builtin");
 
 pub const Device = @This();
@@ -20,7 +20,10 @@ backend: union {
         dkb: rhi.vulkan.vk.DeviceWrapper,
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
-    mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        device: rhi.metal.mtl.Device,
+        queue: rhi.metal.mtl.CommandQueue,
+    } else void,
 } = undefined,
 
 fn supports_extension(extensions: [][*:0]const u8, value: []const u8) bool {
@@ -299,6 +302,20 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
             .vma_allocator = vma_allocator,
         } } };
     }
+    if (rhi.is_target_selected(.mtl, renderer)) {
+        const mtl_device = adapter.backend.mtl.device;
+        const queue = mtl_device.newCommandQueue() orelse return error.MetalCommandQueueCreationFailed;
+        // Metal has a single device-level queue; graphics/compute/transfer all
+        // share it.
+        const graphics_queue = rhi.Queue{ .backend = .{ .mtl = .{ .queue = queue } } };
+        return .{
+            .graphics_queue = graphics_queue,
+            .compute_queue = null,
+            .transfer_queue = null,
+            .adapter = adapter.*,
+            .backend = .{ .mtl = .{ .device = mtl_device, .queue = queue } },
+        };
+    }
     return error.Unitialized;
 }
 
@@ -307,6 +324,11 @@ pub fn deinit(self: *Device, renderer: *rhi.Renderer) void {
         vma.c.vmaDestroyAllocator(@ptrCast(self.backend.vk.vma_allocator));
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.backend.vk.dkb;
         dkb.destroyDevice(self.backend.vk.device, null);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.queue.release();
+        self.backend.mtl.device.release();
         return;
     }
     unreachable;

@@ -8,7 +8,11 @@ backend: union {
     else
         void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
-    mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    // Metal has a single device-level command queue; there is no separate
+    // queue-family concept. Frame submission is driven by `Swapchain.frame_submit`.
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        queue: rhi.metal.mtl.CommandQueue,
+    } else void,
 },
 
 pub fn submit(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
@@ -43,6 +47,12 @@ pub fn wait_queue_idle(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Devic
     if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         _ = try dkb.queueWaitIdle(self.backend.vk.queue);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        // On Metal, ordering/completion is tracked per command buffer (the
+        // command ring waits on the last submitted buffer). A device-wide
+        // queue wait is a no-op here.
         return;
     }
     unreachable;

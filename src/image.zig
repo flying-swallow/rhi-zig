@@ -1,5 +1,5 @@
 const rhi = @import("root.zig");
-const vma = @import("vma");
+const vma = @import("root.zig").vma;
 const std = @import("std");
 
 pub const Barrier = union {
@@ -15,13 +15,16 @@ backend: union {
         allocation: ?vma.c.VmaAllocation = null,
     } else void,
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    // A Metal texture is its own view, so there is no separate view object.
+    mtl: rhi.wrapper_platform_type(.mtl, struct {
+        texture: rhi.metal.mtl.Texture,
+    }),
 },
 
 pub const ImageView = union {
-    vk: rhi.wrapper_platform_type(.vk, rhi.vulkan.vk.ImageView),
+    vk: if (rhi.platform_has_api(.vk)) rhi.vulkan.vk.ImageView else void,
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    mtl: if (rhi.platform_has_api(.mtl)) rhi.metal.mtl.Texture else void,
 };
 
 pub fn init(
@@ -140,6 +143,111 @@ pub fn deinit(self: *Image, renderer: *rhi.Renderer, device: *rhi.Device) void {
     }
     unreachable;
 }
+
+/// A depth render target sized to a render area. Bundles the backing image and
+/// (on Vulkan) its image view; on Metal it is a single private texture. Used as
+/// the depth attachment in `Cmd.begin_rendering`.
+pub const DepthTexture = struct {
+    width: u32,
+    height: u32,
+    backend: union {
+        vk: if (rhi.platform_has_api(.vk)) struct {
+            image: rhi.vulkan.vk.Image,
+            allocation: vma.c.VmaAllocation,
+            view: rhi.vulkan.vk.ImageView,
+        } else void,
+        dx12: rhi.wrapper_platform_type(.dx12, struct {}),
+        mtl: if (rhi.platform_has_api(.mtl)) struct {
+            texture: rhi.metal.mtl.Texture,
+        } else void,
+    },
+
+    /// 32-bit float depth (`VK_FORMAT_D32_SFLOAT` / `MTLPixelFormatDepth32Float`).
+    pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, width: u32, height: u32) !DepthTexture {
+        if (rhi.is_target_selected(.vk, renderer)) {
+            var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+            var image_create_info: rhi.vulkan.vk.ImageCreateInfo = .{
+                .image_type = .type_2d,
+                .format = .d32_sfloat,
+                .extent = .{ .width = width, .height = height, .depth = 1 },
+                .mip_levels = 1,
+                .array_layers = 1,
+                .samples = .{ .@"1_bit" = true },
+                .tiling = .optimal,
+                .usage = .{ .depth_stencil_attachment_bit = true },
+                .sharing_mode = .exclusive,
+                .initial_layout = .undefined,
+            };
+            var allocation_info: vma.c.VmaAllocationCreateInfo = .{};
+            allocation_info.usage = vma.c.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+            var vma_info = vma.c.VmaAllocationInfo{};
+            var vk_image: vma.c.VkImage = undefined;
+            var vma_alloc: vma.c.VmaAllocation = undefined;
+            try rhi.vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateImage(
+                device.backend.vk.vma_allocator,
+                @ptrCast(&image_create_info),
+                &allocation_info,
+                &vk_image,
+                &vma_alloc,
+                &vma_info,
+            )));
+            const depth_image: rhi.vulkan.vk.Image = @enumFromInt(@intFromPtr(vk_image));
+            const view_create_info: rhi.vulkan.vk.ImageViewCreateInfo = .{
+                .image = depth_image,
+                .view_type = .@"2d",
+                .format = .d32_sfloat,
+                .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
+                .subresource_range = .{ .aspect_mask = .{ .depth_bit = true }, .base_mip_level = 0, .level_count = 1, .base_array_layer = 0, .layer_count = 1 },
+            };
+            const depth_view = try dkb.createImageView(device.backend.vk.device, &view_create_info, null);
+            return .{ .width = width, .height = height, .backend = .{ .vk = .{ .image = depth_image, .allocation = vma_alloc, .view = depth_view } } };
+        }
+        if (rhi.is_target_selected(.mtl, renderer)) {
+            const desc = rhi.metal.mtl.TextureDescriptor.texture2D(.depth32float, width, height, false);
+            desc.setUsage(.{ .render_target = true });
+            desc.setStorageMode(.private);
+            const texture = device.backend.mtl.device.newTexture(desc) orelse return error.MetalDepthTextureFailed;
+            return .{ .width = width, .height = height, .backend = .{ .mtl = .{ .texture = texture } } };
+        }
+        return error.UnsupportedBackend;
+    }
+
+    pub fn deinit(self: *DepthTexture, renderer: *rhi.Renderer, device: *rhi.Device) void {
+        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+            var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+            dkb.destroyImageView(device.backend.vk.device, self.backend.vk.view, null);
+            vma.c.vmaDestroyImage(device.backend.vk.vma_allocator, @ptrFromInt(@intFromEnum(self.backend.vk.image)), self.backend.vk.allocation);
+            return;
+        }
+        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+            self.backend.mtl.texture.release();
+            return;
+        }
+    }
+
+    /// The attachment view to pass to `Cmd.begin_rendering`'s depth attachment.
+    pub fn view(self: *DepthTexture, renderer: *rhi.Renderer) ImageView {
+        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+            return .{ .vk = self.backend.vk.view };
+        }
+        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+            return .{ .mtl = self.backend.mtl.texture };
+        }
+        unreachable;
+    }
+
+    /// A transient `Image` view of the depth target for `Cmd.pipeline_barrier`
+    /// (Vulkan layout transitions; a no-op target on Metal).
+    pub fn image(self: *DepthTexture, renderer: *rhi.Renderer) Image {
+        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+            return .{ .backend = .{ .vk = .{ .image = self.backend.vk.image, .allocation = null } } };
+        }
+        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+            return .{ .backend = .{ .mtl = .{ .texture = self.backend.mtl.texture } } };
+        }
+        unreachable;
+    }
+};
 
 
 //pub fn barrier(self: *Image, comptime selection: rhi.Backend, renderer: *rhi.Renderer, options: struct {

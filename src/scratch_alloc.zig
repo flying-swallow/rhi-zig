@@ -1,5 +1,5 @@
 const rhi = @import("root.zig");
-const vma = @import("vma");
+const vma = @import("root.zig").vma;
 const std = @import("std");
 
 /// A single GPU-visible memory block returned by an AllocFn.

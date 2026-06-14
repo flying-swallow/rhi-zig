@@ -1,7 +1,7 @@
 pub const Swapchain = @This();
 pub const rhi = @import("root.zig");
 const builtin = @import("builtin");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 const std = @import("std");
 
 pub const SwapchainFormat = enum { bt709_g10_16bit, bt709_g22_8bit, bt709_g22_10bit, bt2020_g2084_10bit };
@@ -66,7 +66,13 @@ backend: union {
         }
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
-    mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        layer: rhi.metal.ca.MetalLayer,
+        pixel_format: rhi.metal.types.PixelFormat,
+        // The drawable acquired this frame (vended by the layer). Held until
+        // present.
+        current_drawable: ?rhi.metal.ca.MetalDrawable = null,
+    } else void,
 },
 
 fn vk_wapchain_create_info_khr_default(option: struct { surface: rhi.vulkan.vk.SurfaceKHR, format: rhi.vulkan.vk.Format, present_mode: rhi.vulkan.vk.PresentModeKHR, color_space: rhi.vulkan.vk.ColorSpaceKHR, width: u32, height: u32, image_count: usize }) rhi.vulkan.vk.SwapchainCreateInfoKHR {
@@ -104,6 +110,9 @@ pub fn image_view(self: *Swapchain, renderer: *rhi.Renderer, index: u32) rhi.Ima
             .vk = self.backend.vk.views[index],
         };
     }
+    if (rhi.is_target_selected(.mtl, renderer)) {
+        return .{ .mtl = self.backend.mtl.current_drawable.?.texture() };
+    }
     unreachable;
 }
 
@@ -114,6 +123,9 @@ pub fn image(self: *Swapchain, renderer: *rhi.Renderer, index: u32) rhi.Image {
                 .vk = .{ .image = self.backend.vk.images[index] },
             },
         };
+    }
+    if (rhi.is_target_selected(.mtl, renderer)) {
+        return .{ .backend = .{ .mtl = .{ .texture = self.backend.mtl.current_drawable.?.texture() } } };
     }
     unreachable;
 }
@@ -157,7 +169,10 @@ pub fn deinit(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device) vo
         self.allocator.free(self.backend.vk.signal_semaphores);
         return;
     }
-
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        // The CAMetalLayer is owned by the window/SDL; nothing to free here.
+        return;
+    }
     unreachable;
 }
 
@@ -175,6 +190,13 @@ pub fn acquire_next_image(self: *Swapchain, renderer: *rhi.Renderer, device: *rh
         self.backend.vk.signal_idx = (self.backend.vk.signal_idx + 1) % @as(u32, @intCast(self.backend.vk.signal_semaphores.len));
         const res = try dkb.acquireNextImageKHR(device.backend.vk.device, self.backend.vk.swapchain, std.math.maxInt(u64), self.backend.vk.signal_semaphores[self.backend.vk.signal_idx], .null_handle);
         return res.image_index;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        // Metal has no image-index concept — the layer vends the next drawable
+        // synchronously. Hold it for rendering/present; index 0 is inert.
+        self.backend.mtl.current_drawable = self.backend.mtl.layer.nextDrawable() orelse
+            return error.MetalNoDrawable;
+        return 0;
     }
     unreachable;
 }
@@ -198,9 +220,70 @@ pub fn present_vk(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device
     unreachable;
 }
 
+/// Backend-agnostic end-of-frame: end the command buffer, submit it (signalling
+/// the ring's sync primitive and waiting on the acquire semaphore), and present.
+/// Replaces the inline submit/present the examples used to do against raw Vulkan.
+pub fn frame_submit(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+    image_index: u32,
+    ring_element: *rhi.cmd.CommandRingElement,
+    cmd: *rhi.Cmd,
+}) !void {
+    try options.cmd.end(renderer, device);
+    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        const cmd_submit = [_]rhi.vulkan.vk.CommandBufferSubmitInfo{.{
+            .command_buffer = options.cmd.backend.vk.cmd,
+            .device_mask = 0,
+        }};
+        const wait_semaphore_info = [_]rhi.vulkan.vk.SemaphoreSubmitInfo{.{
+            .semaphore = self.backend.vk.current_semaphore(),
+            .stage_mask = .{ .color_attachment_output_bit = true },
+            .value = 0,
+            .device_index = 0,
+        }};
+        const signal_semaphore_info = [_]rhi.vulkan.vk.SemaphoreSubmitInfo{.{
+            .semaphore = options.ring_element.backend.vk.semaphore,
+            .value = 0,
+            .stage_mask = .{ .all_commands_bit = true },
+            .device_index = 0,
+        }};
+        var submit_info = [_]rhi.vulkan.vk.SubmitInfo2{.{
+            .p_command_buffer_infos = cmd_submit[0..].ptr,
+            .command_buffer_info_count = cmd_submit.len,
+            .p_wait_semaphore_infos = wait_semaphore_info[0..].ptr,
+            .wait_semaphore_info_count = wait_semaphore_info.len,
+            .p_signal_semaphore_infos = signal_semaphore_info[0..].ptr,
+            .signal_semaphore_info_count = signal_semaphore_info.len,
+        }};
+        std.debug.assert(try dkb.getFenceStatus(device.backend.vk.device, options.ring_element.backend.vk.fence) == .success);
+        var reset_fence = [_]rhi.vulkan.vk.Fence{options.ring_element.backend.vk.fence};
+        _ = try dkb.resetFences(device.backend.vk.device, reset_fence[0..]);
+        _ = try dkb.queueSubmit2(self.present_queue.backend.vk.queue, submit_info[0..], options.ring_element.backend.vk.fence);
+
+        var wait_semaphores = [_]rhi.vulkan.vk.Semaphore{options.ring_element.backend.vk.semaphore};
+        try self.present_vk(renderer, device, options.image_index, &wait_semaphores);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        const drawable = self.backend.mtl.current_drawable orelse return error.MetalNoDrawable;
+        const cb = options.cmd.backend.mtl.cmd orelse return error.MetalNoCommandBuffer;
+        cb.presentDrawable(drawable.id());
+        cb.commit();
+        self.backend.mtl.current_drawable = null;
+        return;
+    }
+    unreachable;
+}
+
 pub fn resize(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, width: u16, height: u16) !bool {
     if (width == self.width and height == self.height) {
         return false;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.layer.setDrawableSize(.{ .width = @floatFromInt(width), .height = @floatFromInt(height) });
+        self.width = width;
+        self.height = height;
+        return true;
     }
     if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
@@ -274,6 +357,27 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
     format: SwapchainFormat = .bt709_g22_8bit,
     image_count: u32 = 3,
 }) !Swapchain {
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        const layer = rhi.metal.ca.MetalLayer.fromId(@ptrCast(@alignCast(handle.metal.layer))) orelse return error.MetalNoLayer;
+        const pixel_format: rhi.metal.types.PixelFormat = switch (option.format) {
+            .bt709_g22_8bit => .bgra8unorm,
+            else => .bgra8unorm,
+        };
+        layer.setDevice(device.backend.mtl.device);
+        layer.setPixelFormat(pixel_format);
+        layer.setDrawableSize(.{ .width = @floatFromInt(width), .height = @floatFromInt(height) });
+        return Swapchain{
+            .allocator = allocator,
+            .width = width,
+            .height = height,
+            .present_queue = queue,
+            .backend = .{ .mtl = .{
+                .layer = layer,
+                .pixel_format = pixel_format,
+                .current_drawable = null,
+            } },
+        };
+    }
     if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
         var ikb: *rhi.vulkan.vk.InstanceWrapper = &renderer.backend.vk.ikb;
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;

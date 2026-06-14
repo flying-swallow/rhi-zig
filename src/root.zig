@@ -3,7 +3,7 @@ const std = @import("std");
 
 const builtin = @import("builtin");
 
-pub const vma = @import("vma");
+pub const vma = if (platform_has_api(.vk)) @import("vma") else void;
 pub const format = @import("format.zig");
 pub const renderer = @import("renderer.zig");
 pub const device = @import("device.zig");
@@ -34,6 +34,7 @@ pub const WindowHandle = swapchain.WindowHandle;
 pub const Pool = cmd.Pool;
 pub const Cmd = cmd.Cmd;
 pub const Image = image.Image;
+pub const DepthTexture = image.DepthTexture;
 pub const Descriptor = descriptor.Descriptor;
 pub const Sampler = sampler.Sampler;
 pub const Format = format.Format;
@@ -79,13 +80,15 @@ pub fn platform_has_api(comptime target: Backend) bool {
 }
 
 pub const vulkan = if (platform_has_api(.vk)) @import("vulkan.zig") else void;
+pub const metal = if (platform_has_api(.mtl)) @import("metal.zig") else void;
 
-pub fn is_target_selected(comptime api: Backend, ren: *Renderer) bool {
-    switch (api) {
-        .vk => return platform_has_api(.vk) and ren.backend == .vk,
-        .dx12 => return platform_has_api(.dx12) and ren.backend == .dx12,
-        .mtl => return platform_has_api(.mtl) and ren.backend == .mtl,
-    }
+/// `inline` so that `platform_has_api(api)` (a comptime-known bool) folds into
+/// the caller's `if` condition: on a platform where `api` is unavailable the
+/// branch becomes comptime-false and its body (which dereferences that
+/// backend's types) is never analyzed.
+pub inline fn is_target_selected(comptime api: Backend, ren: *Renderer) bool {
+    if (comptime !platform_has_api(api)) return false;
+    return ren.backend == api;
 }
 
 //pub fn select(ren: *Renderer, comptime T: type, pass: T, comptime predicate: fn (comptime target: Backend, val: T) void) void {
@@ -103,4 +106,56 @@ pub fn wrapper_platform_type(comptime api: Backend, comptime impl: type) type {
     } else {
         return void;
     }
+}
+
+test "metal: renderer -> adapter -> device init" {
+    if (comptime !platform_has_api(.mtl)) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    var ren = try Renderer.init(allocator, .{ .mtl = .{} });
+    defer ren.deinit();
+    try std.testing.expectEqualStrings("Metal", ren.apiString());
+
+    var adapters = try PhysicalAdapter.enumerate_adapters(allocator, &ren);
+    defer adapters.deinit(allocator);
+    try std.testing.expect(adapters.items.len >= 1);
+
+    const idx = PhysicalAdapter.default_select_adapter(adapters.items);
+    const name = std.mem.sliceTo(&adapters.items[idx].name, 0);
+    try std.testing.expect(name.len > 0);
+    std.debug.print("metal device: {s}\n", .{name});
+
+    var dev = try Device.init(allocator, &ren, &adapters.items[idx]);
+    defer dev.deinit(&ren);
+    try dev.graphics_queue.wait_queue_idle(&ren, &dev);
+}
+
+test "metal: swapchain drawable + command buffer" {
+    if (comptime !platform_has_api(.mtl)) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+
+    var ren = try Renderer.init(allocator, .{ .mtl = .{} });
+    defer ren.deinit();
+    var adapters = try PhysicalAdapter.enumerate_adapters(allocator, &ren);
+    defer adapters.deinit(allocator);
+    const idx = PhysicalAdapter.default_select_adapter(adapters.items);
+    var dev = try Device.init(allocator, &ren, &adapters.items[idx]);
+    defer dev.deinit(&ren);
+
+    // Stand in for a window surface with an offscreen CAMetalLayer.
+    const layer = metal.ca.MetalLayer.layer();
+    const handle: WindowHandle = .{ .metal = .{ .layer = @ptrCast(layer.obj.value) } };
+
+    var sc = try Swapchain.init(allocator, &ren, &dev, 64, 64, &dev.graphics_queue, handle, .{});
+    defer sc.deinit(&ren, &dev);
+
+    const index = try sc.acquire_next_image(&ren, &dev);
+    const view = sc.image_view(&ren, index);
+    try std.testing.expect(view.mtl.obj.value != null);
+
+    var pool = try Pool.init(&ren, &dev, &dev.graphics_queue);
+    defer pool.deinit(&ren, &dev);
+    var command = try Cmd.init(&ren, &dev, &pool);
+    try command.begin(&ren, &dev);
+    try std.testing.expect(command.backend.mtl.cmd != null);
 }

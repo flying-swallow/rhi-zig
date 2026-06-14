@@ -1,6 +1,6 @@
 const rhi = @import("root.zig");
 const std = @import("std");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 
 pub const FilterType = enum(u1) { nearest = 0, linear = 1 };
 

@@ -1,5 +1,5 @@
 const rhi = @import("root.zig");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 const std = @import("std");
 const assert = std.debug.assert;
 const builtin = @import("builtin");
@@ -61,6 +61,7 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
 }) !Renderer {
     switch (impl) {
         .vk => |opt| {
+          if (comptime rhi.platform_has_api(.vk)) {
             var dynLib = switch (builtin.os.tag) {
                 .windows => p: {
                     break :p std.DynLib.open("vulkan-1.dll") catch |err| {
@@ -190,6 +191,8 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
                 .debug_message_utils = debug_message_util,
                 .vkb = loader,
             } } };
+          }
+          return error.VulkanNotSupported;
         },
         .dx12 => {
             if (rhi.platform_has_api(.dx12)) {

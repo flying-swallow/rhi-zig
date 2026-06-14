@@ -1,5 +1,5 @@
 const rhi = @import("root.zig");
-const vma = @import("vma");
+const vma = @import("root.zig").vma;
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -11,7 +11,9 @@ backend: union {
         allocation: vma.c.VmaAllocation = null,
     } else void,
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        buffer: rhi.metal.mtl.Buffer,
+    } else void,
 } = undefined,
 
 //  General buffer initialization function
@@ -111,6 +113,17 @@ pub fn init_general(
                 null,
         };
     }
+    if (rhi.is_target_selected(.mtl, renderer)) {
+        // Shared storage: the buffer is CPU-visible, so `mapped_region` points
+        // straight at its contents (no staging/blit needed on Apple Silicon).
+        const buffer = device.backend.mtl.device.newBuffer(options.size, .{ .storage_mode = .shared }) orelse
+            return error.MetalBufferCreationFailed;
+        const contents = buffer.contents();
+        return .{
+            .backend = .{ .mtl = .{ .buffer = buffer } },
+            .mapped_region = if (contents) |p| @as([*]u8, @ptrCast(p))[0..options.size] else null,
+        };
+    }
     unreachable;
 }
 
@@ -120,9 +133,12 @@ pub fn deinit(self: *Buffer, renderer: *rhi.Renderer, device: *rhi.Device) void 
             device.backend.vk.vma_allocator,
             @ptrFromInt(@intFromEnum(self.backend.vk.buffer)), self.backend.vk.allocation);
         return;
-    } 
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        self.backend.mtl.buffer.release();
+        return;
+    }
     unreachable;
-   
 }
 
 //pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, options: struct {

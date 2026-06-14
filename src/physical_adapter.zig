@@ -34,7 +34,9 @@ backend: union {
         is_maintenance5_supported: bool = false,
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
-    mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        device: rhi.metal.mtl.Device,
+    } else void,
 },
 name: [256]u8 = std.mem.zeroes([256]u8),
 luid: u64 = 0,
@@ -466,6 +468,17 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
             std.mem.copyForwards(u8, physical_adapter.name[0..], std.mem.sliceTo(properties.properties.device_name[0..], 0));
             try result.append(allocator, physical_adapter);
         }
+    }
+    if (rhi.is_target_selected(.mtl, renderer)) {
+        // Metal exposes a single default device on macOS/iOS.
+        const device = rhi.metal.mtl.createSystemDefaultDevice() orelse return error.MetalDeviceNotFound;
+        var physical_adapter: PhysicalAdapter = .{ .backend = .{ .mtl = .{ .device = device } } };
+        physical_adapter.adapter_type = if (device.isLowPower()) .integrated else .discrete;
+        physical_adapter.preset_level = .high;
+        const name = device.name().utf8();
+        const n = @min(name.len, physical_adapter.name.len - 1);
+        std.mem.copyForwards(u8, physical_adapter.name[0..n], name[0..n]);
+        try result.append(allocator, physical_adapter);
     }
     return result;
 }

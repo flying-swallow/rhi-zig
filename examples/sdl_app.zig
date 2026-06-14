@@ -39,7 +39,11 @@ pub fn sdl_window_handle_to_rhi_window_handle(window: *sdl.SDL_Window) !rhi.Wind
             } };
         }
     } else if (builtin.os.tag == .macos or builtin.os.tag == .ios) {
-
+        // Create a Metal-backed view and hand its CAMetalLayer to the RHI.
+        const view = sdl.SDL_Metal_CreateView(window);
+        if (view == null) return error.SdlError;
+        const layer = sdl.SDL_Metal_GetLayer(view) orelse return error.SdlError;
+        return rhi.WindowHandle{ .metal = .{ .layer = layer } };
     }
     // zig fmt: on
     return error.SdlError;

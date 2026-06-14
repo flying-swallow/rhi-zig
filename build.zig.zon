@@ -5,6 +5,7 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .vma = .{ .path = "deps/vma", .lazy = true },
+        .metal = .{ .path = "deps/metal", .lazy = true },
         .zwindows = .{
             .url = "git+https://github.com/zig-gamedev/zwindows.git#e2c049ff9abd7a3d32e5aaa04223fc9eee2c593a",
             .hash = "zwindows-0.2.0-dev-xMZ1u9hgDAAvgSPmVyhXSpSuq3chYsBsUXfb8E_W88Eo",
@@ -16,6 +17,7 @@
         .sdl = .{
             .url = "git+https://github.com/castholm/SDL.git#1994ca5dbad5a3e3c670a9ab8533d86cfd97bdc0",
             .hash = "sdl-0.2.6+3.2.20-7uIn9NgjfwHH5a6HhyLHat2nHU3OP5B05QHhKJKuxEex",
+            .lazy = true,
         },
         .vulkan = .{
             .url = "git+https://github.com/flying-swallow/vulkan-zig.git#3adbeefbc833c12656791d304b37a6315b357745",
@@ -24,10 +26,6 @@
         .zla = .{
             .url = "git+https://github.com/flying-swallow/zig-linear-algebra.git#02ae65d4235e8db9f9a54c68506bc952afbdcad6",
             .hash = "zla-0.0.2-zqm18F6nAQBFAQsYpFl_Jr0lzud3zGK6y0N1l2Djm3R_",
-        },
-        .cimgui_zig = .{
-            .url = "git+https://github.com/tiawl/cimgui.zig.git#947dbb551a78427c66055da48a18a15739aab921",
-            .hash = "cimgui_zig-1.0.0-2XubkmPNvwBq2ojNgGB2nzfLhA270r2LrnmaLGt93Jmd",
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },

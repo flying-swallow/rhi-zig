@@ -1,19 +1,234 @@
 const rhi = @import("root.zig");
 const std = @import("std");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 
 pub const Pipeline = @This();
 backend: union {
-    vk: if (rhi.platform_has_api(.vk)) struct { pipeline: rhi.vulkan.vk.Pipeline } else void,
+    vk: if (rhi.platform_has_api(.vk)) struct {
+        pipeline: rhi.vulkan.vk.Pipeline,
+        layout: rhi.vulkan.vk.PipelineLayout = .null_handle,
+    } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
-    mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        state: rhi.metal.mtl.RenderPipelineState,
+        // Metal depth/stencil state is bound on the encoder, not baked into the
+        // render pipeline, so it is carried here and set by `Cmd.bind_pipeline`.
+        depth_stencil_state: ?rhi.metal.mtl.DepthStencilState = null,
+    } else void,
 },
 
 pub fn deinit(self: *Pipeline, renderer: *rhi.Renderer, device: *rhi.Device) void {
     if (rhi.is_target_selected(.vk, renderer)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.destroyPipeline(device.backend.vk.device, self.backend.vk.pipeline, null);
+        if (self.backend.vk.layout != .null_handle)
+            dkb.destroyPipelineLayout(device.backend.vk.device, self.backend.vk.layout, null);
+        return;
     }
+    if (rhi.is_target_selected(.mtl, renderer)) {
+        if (self.backend.mtl.depth_stencil_state) |dss| dss.release();
+        self.backend.mtl.state.release();
+        return;
+    }
+}
+
+pub const VertexFormat = enum { float, float2, float3, float4 };
+pub const VertexAttribute = struct { location: u32, format: VertexFormat, offset: u32 };
+pub const VertexLayout = struct { stride: u32, attributes: []const VertexAttribute };
+
+/// Metal reserves vertex buffer index 0 for the vertex-stage push constants
+/// (slangc emits the `[[vk::push_constant]]` block at `[[buffer(0)]]`), so
+/// vertex streams are bound starting at index 1.
+pub const mtl_vertex_buffer_base: u32 = 1;
+
+/// Minimal backend-agnostic graphics pipeline for the examples: a vertex +
+/// fragment shader rendering to the swapchain's color format, triangle list,
+/// dynamic viewport/scissor, with an optional vertex layout and vertex-stage
+/// push constants.
+pub fn init_graphics(renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+    shader: *rhi.Shader,
+    swapchain: *rhi.Swapchain,
+    vertex_layout: ?VertexLayout = null,
+    push_constant_size: u32 = 0,
+    /// Enable depth testing/writing against a D32_SFLOAT depth attachment.
+    depth_test: bool = false,
+}) !Pipeline {
+    if (rhi.is_target_selected(.vk, renderer)) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        const vk_shader = options.shader.backend.vk;
+        var stages = [_]rhi.vulkan.vk.PipelineShaderStageCreateInfo{
+            .{ .stage = .{ .vertex_bit = true }, .module = vk_shader.vertex_module, .p_name = "main" },
+            .{ .stage = .{ .fragment_bit = true }, .module = vk_shader.pixel_module, .p_name = "main" },
+        };
+        var color_blend_attachment = [_]rhi.vulkan.vk.PipelineColorBlendAttachmentState{.{
+            .blend_enable = .false,
+            .src_color_blend_factor = .one,
+            .dst_color_blend_factor = .zero,
+            .color_blend_op = .add,
+            .src_alpha_blend_factor = .one,
+            .dst_alpha_blend_factor = .zero,
+            .alpha_blend_op = .add,
+            .color_write_mask = .{ .r_bit = true, .g_bit = true, .b_bit = true, .a_bit = true },
+        }};
+        var dynamic_states = [_]rhi.vulkan.vk.DynamicState{ .viewport, .scissor };
+        var dynamic_state: rhi.vulkan.vk.PipelineDynamicStateCreateInfo = .{
+            .dynamic_state_count = dynamic_states.len,
+            .p_dynamic_states = &dynamic_states,
+        };
+        var blend_state: rhi.vulkan.vk.PipelineColorBlendStateCreateInfo = .{
+            .logic_op_enable = .false,
+            .logic_op = .clear,
+            .blend_constants = .{ 0, 0, 0, 0 },
+            .attachment_count = color_blend_attachment.len,
+            .p_attachments = &color_blend_attachment,
+        };
+        var viewport_state: rhi.vulkan.vk.PipelineViewportStateCreateInfo = .{ .viewport_count = 1, .scissor_count = 1 };
+        var rasterization_state: rhi.vulkan.vk.PipelineRasterizationStateCreateInfo = .{
+            .depth_clamp_enable = .false,
+            .rasterizer_discard_enable = .false,
+            .polygon_mode = .fill,
+            .cull_mode = .{ .front_bit = false, .back_bit = false },
+            .front_face = .clockwise,
+            .depth_bias_constant_factor = 0,
+            .depth_bias_slope_factor = 0,
+            .depth_bias_clamp = 0,
+            .depth_bias_enable = .false,
+            .line_width = 1,
+        };
+        var input_assembly: rhi.vulkan.vk.PipelineInputAssemblyStateCreateInfo = .{ .topology = .triangle_list, .primitive_restart_enable = .false };
+        var multisample_state: rhi.vulkan.vk.PipelineMultisampleStateCreateInfo = .{
+            .rasterization_samples = .{ .@"1_bit" = true },
+            .sample_shading_enable = .false,
+            .min_sample_shading = 1,
+            .p_sample_mask = null,
+            .alpha_to_coverage_enable = .false,
+            .alpha_to_one_enable = .false,
+        };
+        var vertex_bindings: [1]rhi.vulkan.vk.VertexInputBindingDescription = undefined;
+        var vertex_attrs: [8]rhi.vulkan.vk.VertexInputAttributeDescription = undefined;
+        var vertex_input_state: rhi.vulkan.vk.PipelineVertexInputStateCreateInfo = .{
+            .vertex_binding_description_count = 0,
+            .vertex_attribute_description_count = 0,
+        };
+        if (options.vertex_layout) |layout_desc| {
+            vertex_bindings[0] = .{ .binding = 0, .stride = layout_desc.stride, .input_rate = .vertex };
+            for (layout_desc.attributes, 0..) |attr, i| {
+                vertex_attrs[i] = .{ .location = attr.location, .binding = 0, .format = vk_vertex_format(attr.format), .offset = attr.offset };
+            }
+            vertex_input_state = .{
+                .vertex_binding_description_count = 1,
+                .p_vertex_binding_descriptions = &vertex_bindings,
+                .vertex_attribute_description_count = @intCast(layout_desc.attributes.len),
+                .p_vertex_attribute_descriptions = &vertex_attrs,
+            };
+        }
+        var push_ranges: [1]rhi.vulkan.vk.PushConstantRange = undefined;
+        var layout_info: rhi.vulkan.vk.PipelineLayoutCreateInfo = .{ .set_layout_count = 0, .push_constant_range_count = 0 };
+        if (options.push_constant_size > 0) {
+            push_ranges[0] = .{ .stage_flags = .{ .vertex_bit = true }, .offset = 0, .size = options.push_constant_size };
+            layout_info.push_constant_range_count = 1;
+            layout_info.p_push_constant_ranges = &push_ranges;
+        }
+        const layout = try dkb.createPipelineLayout(device.backend.vk.device, &layout_info, null);
+        errdefer dkb.destroyPipelineLayout(device.backend.vk.device, layout, null);
+
+        var depth_stencil_state: rhi.vulkan.vk.PipelineDepthStencilStateCreateInfo = .{
+            .depth_test_enable = if (options.depth_test) .true else .false,
+            .depth_write_enable = if (options.depth_test) .true else .false,
+            .depth_compare_op = .less,
+            .depth_bounds_test_enable = .false,
+            .stencil_test_enable = .false,
+            .min_depth_bounds = 0,
+            .max_depth_bounds = 1,
+            .front = std.mem.zeroes(rhi.vulkan.vk.StencilOpState),
+            .back = std.mem.zeroes(rhi.vulkan.vk.StencilOpState),
+        };
+        var create_info = [1]rhi.vulkan.vk.GraphicsPipelineCreateInfo{.{
+            .stage_count = stages.len,
+            .p_stages = &stages,
+            .subpass = 0,
+            .layout = layout,
+            .base_pipeline_index = -1,
+            .p_color_blend_state = &blend_state,
+            .p_rasterization_state = &rasterization_state,
+            .p_multisample_state = &multisample_state,
+            .p_vertex_input_state = &vertex_input_state,
+            .p_viewport_state = &viewport_state,
+            .p_input_assembly_state = &input_assembly,
+            .p_dynamic_state = &dynamic_state,
+            .p_depth_stencil_state = &depth_stencil_state,
+        }};
+        var color_formats = [_]rhi.vulkan.vk.Format{options.swapchain.backend.vk.format};
+        var rendering_info: rhi.vulkan.vk.PipelineRenderingCreateInfo = .{
+            .color_attachment_count = color_formats.len,
+            .p_color_attachment_formats = &color_formats,
+            .view_mask = 0,
+            .depth_attachment_format = if (options.depth_test) .d32_sfloat else .undefined,
+            .stencil_attachment_format = .undefined,
+        };
+        rhi.vulkan.add_next(&create_info[0], &rendering_info);
+        var pipeline: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
+        _ = try dkb.createGraphicsPipelines(device.backend.vk.device, .null_handle, &create_info, null, &pipeline);
+        return .{ .backend = .{ .vk = .{ .pipeline = pipeline[0], .layout = layout } } };
+    }
+    if (rhi.is_target_selected(.mtl, renderer)) {
+        const dev = device.backend.mtl.device;
+        const desc = rhi.metal.mtl.RenderPipelineDescriptor.init();
+        defer desc.release();
+        desc.setVertexFunction(options.shader.backend.mtl.vertex_function.?);
+        desc.setFragmentFunction(options.shader.backend.mtl.fragment_function.?);
+        desc.colorAttachments().object(0).setPixelFormat(options.swapchain.backend.mtl.pixel_format);
+        if (options.depth_test) {
+            desc.setDepthAttachmentPixelFormat(.depth32float);
+        }
+        if (options.vertex_layout) |layout_desc| {
+            const vd = rhi.metal.mtl.VertexDescriptor.vertexDescriptor();
+            const buf_index: rhi.metal.types.UInteger = mtl_vertex_buffer_base;
+            for (layout_desc.attributes) |attr| {
+                const a = vd.attributes().object(attr.location);
+                a.setFormat(mtl_vertex_format(attr.format));
+                a.setOffset(attr.offset);
+                a.setBufferIndex(buf_index);
+            }
+            const l = vd.layouts().object(buf_index);
+            l.setStride(layout_desc.stride);
+            l.setStepFunction(.per_vertex);
+            desc.setVertexDescriptor(vd);
+        }
+        var err: ?rhi.metal.ns.Error = null;
+        const state = dev.newRenderPipelineState(desc, &err) orelse {
+            if (err) |e| std.log.err("MTLRenderPipelineState: {s}", .{e.localizedDescription().utf8()});
+            return error.PipelineCreationFailed;
+        };
+        var depth_stencil_state: ?rhi.metal.mtl.DepthStencilState = null;
+        if (options.depth_test) {
+            const dss_desc = rhi.metal.mtl.DepthStencilDescriptor.init();
+            defer dss_desc.release();
+            dss_desc.setDepthCompareFunction(.less);
+            dss_desc.setDepthWriteEnabled(true);
+            depth_stencil_state = dev.newDepthStencilState(dss_desc);
+        }
+        return .{ .backend = .{ .mtl = .{ .state = state, .depth_stencil_state = depth_stencil_state } } };
+    }
+    return error.UnsupportedBackend;
+}
+
+fn vk_vertex_format(format: VertexFormat) rhi.vulkan.vk.Format {
+    return switch (format) {
+        .float => .r32_sfloat,
+        .float2 => .r32g32_sfloat,
+        .float3 => .r32g32b32_sfloat,
+        .float4 => .r32g32b32a32_sfloat,
+    };
+}
+
+fn mtl_vertex_format(format: VertexFormat) rhi.metal.types.VertexFormat {
+    return switch (format) {
+        .float => .float,
+        .float2 => .float2,
+        .float3 => .float3,
+        .float4 => .float4,
+    };
 }
 
 // https://registry.khronos.org/vulkan/specs/latest/man/html/VkPrimitiveTopology.html

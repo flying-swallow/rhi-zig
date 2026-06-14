@@ -1,7 +1,7 @@
 const rhi = @import("root.zig");
-const vma = @import("vma");
+const vma = @import("root.zig").vma;
 const std = @import("std");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 
 //pub const ResourceLoader = @This();
 pub const ResourceConfig = struct {
