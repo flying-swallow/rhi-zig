@@ -8,10 +8,14 @@ backend: union {
     else
         void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
-    mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    // Metal has a single device-level command queue; there is no separate
+    // queue-family concept. Frame submission is driven by `Swapchain.frame_submit`.
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        queue: rhi.metal.mtl.CommandQueue,
+    } else void,
 },
 
-pub fn submit(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+pub fn submit(self: *Queue, device: *rhi.Device, options: struct {
     vk: ?if (rhi.platform_has_api(.vk)) struct {
         wait_semaphores: []const rhi.vulkan.vk.Semaphore,
         mask_wait_stages: []const rhi.vulkan.vk.PipelineStageFlags,
@@ -21,7 +25,7 @@ pub fn submit(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Device, option
     dx12: ?if (rhi.platform_has_api(.dx12)) void else void,
     mtl: ?if (rhi.platform_has_api(.mtl)) void else void,
 }) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         std.debug.assert(options.vk != null);
         var submit_infos = rhi.vulkan.vk.SubmitInfo{
             .s_type = .submit_info,
@@ -39,10 +43,16 @@ pub fn submit(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Device, option
     unreachable;
 }
 
-pub fn wait_queue_idle(self: *Queue, renderer: *rhi.Renderer, device: *rhi.Device) !void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn wait_queue_idle(self: *Queue, device: *rhi.Device) !void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         _ = try dkb.queueWaitIdle(self.backend.vk.queue);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
+        // On Metal, ordering/completion is tracked per command buffer (the
+        // command ring waits on the last submitted buffer). A device-wide
+        // queue wait is a no-op here.
         return;
     }
     unreachable;

@@ -1,6 +1,6 @@
 const rhi = @import("root.zig");
 const std = @import("std");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 
 pub const FilterType = enum(u1) { nearest = 0, linear = 1 };
 
@@ -11,6 +11,8 @@ pub const CompareMode = enum(u3) { never = 0, less = 1, equal = 2, less_or_equal
 pub const AddressMode = enum(u2) { mirror = 0, repeat = 1, clamp_to_edge = 2, clamp_to_border = 3 };
 
 pub const Sampler = @This();
+/// Stable identity / descriptor-set cache key, stamped at creation (0 == empty).
+cookie: u64 = 0,
 backend: union(rhi.Backend) {
     vk: if (rhi.platform_has_api(.vk)) struct {
         sampler: rhi.vulkan.vk.Sampler = .null_handle,
@@ -19,22 +21,13 @@ backend: union(rhi.Backend) {
     mtl: if (rhi.platform_has_api(.mtl)) void else void,
 },
 
-pub fn descriptor(self: *Sampler) rhi.Descriptor {
-    switch (self.backend) {
-        .vk => |vk| {
-            return .{ .backend = .{ .vk = .{ .type = rhi.c.VK_DESCRIPTOR_TYPE_SAMPLER, .view = .{ .image = rhi.c.VkDescriptorImageInfo{
-                .sampler = vk.sampler,
-                .imageView = null,
-                .imageLayout = rhi.c.VK_IMAGE_LAYOUT_UNDEFINED,
-            } } } } };
-        },
-        .dx12 => {},
-        .mtl => {},
-    }
-    return .{};
+/// Build a sampler descriptor referencing this sampler (cookie derived from the
+/// sampler's). Delegates to the backend-neutral `Descriptor.sampler` builder.
+pub fn descriptor(self: *Sampler, device: *rhi.Device) rhi.Descriptor {
+    return rhi.Descriptor.sampler(device, self);
 }
 
-pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, desc: struct {
+pub fn init(device: *rhi.Device, desc: struct {
     min_filter: FilterType,
     mag_filter: FilterType,
     mip_map_mode: MipMapMode,
@@ -48,7 +41,7 @@ pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, desc: struct {
     max_anisotropy: f32,
     compare_func: CompareMode,
 }) Sampler {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var sampler_create_info = rhi.vulkan.vk.SamplerCreateInfo{
             .flags = 0,
@@ -87,8 +80,8 @@ pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, desc: struct {
             .maxAnisotropy = if (desc.max_anisotropy > 1.0) desc.max_anisotropy else 1.0,
         };
         const sampler = try dkb.createSampler(device.backend.vk.device, &sampler_create_info, null);
-        return .{ .backend = .{ .vk = .{ .sampler = sampler } } };
-    } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+        return .{ .cookie = rhi.next_cookie(), .backend = .{ .vk = .{ .sampler = sampler } } };
+    } else if (rhi.is_target_selected(.dx12)) {} else if (rhi.is_target_selected(.mtl)) {}
     return error.UnsupportedBackend;
 }
 

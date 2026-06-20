@@ -1,10 +1,13 @@
 const rhi = @import("root.zig");
-const vma = @import("vma");
+const vma = @import("root.zig").vma;
 const std = @import("std");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 const builtin = @import("builtin");
 
 pub const Device = @This();
+// No back-pointers: the owning renderer (which carries the backend tag) is
+// passed explicitly to every function that needs it, consistent with the rest
+// of the API.
 graphics_queue: rhi.Queue,
 compute_queue: ?rhi.Queue,
 transfer_queue: ?rhi.Queue,
@@ -20,7 +23,10 @@ backend: union {
         dkb: rhi.vulkan.vk.DeviceWrapper,
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
-    mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        device: rhi.metal.mtl.Device,
+        queue: rhi.metal.mtl.CommandQueue,
+    } else void,
 } = undefined,
 
 fn supports_extension(extensions: [][*:0]const u8, value: []const u8) bool {
@@ -32,15 +38,15 @@ fn supports_extension(extensions: [][*:0]const u8, value: []const u8) bool {
     return false;
 }
 
-pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi.PhysicalAdapter) !Device {
-    if (rhi.is_target_selected(.vk, renderer)) {
-        const ikb: *rhi.vulkan.vk.InstanceWrapper = &renderer.backend.vk.ikb;
-        const vkb: *rhi.vulkan.vk.BaseWrapper = &renderer.backend.vk.vkb;
+pub fn init(allocator: std.mem.Allocator, adapter: *rhi.PhysicalAdapter) !Device {
+    if (rhi.is_target_selected(.vk)) {
+        const ikb: *rhi.vulkan.vk.InstanceWrapper = &rhi.renderer.instance.backend.vk.ikb;
+        const vkb: *rhi.vulkan.vk.BaseWrapper = &rhi.renderer.instance.backend.vk.vkb;
         var extension_num: u32 = 0;
-        _ = try renderer.backend.vk.ikb.enumerateDeviceExtensionProperties(adapter.backend.vk.physical_device, null, &extension_num, null);
+        _ = try rhi.renderer.instance.backend.vk.ikb.enumerateDeviceExtensionProperties(adapter.backend.vk.physical_device, null, &extension_num, null);
         const extension_properties: []rhi.vulkan.vk.ExtensionProperties = try allocator.alloc(rhi.vulkan.vk.ExtensionProperties, extension_num);
         defer allocator.free(extension_properties);
-        _ = try renderer.backend.vk.ikb.enumerateDeviceExtensionProperties(adapter.backend.vk.physical_device, null, &extension_num, extension_properties.ptr);
+        _ = try rhi.renderer.instance.backend.vk.ikb.enumerateDeviceExtensionProperties(adapter.backend.vk.physical_device, null, &extension_num, extension_properties.ptr);
         var enabled_extension_names = std.ArrayList([*:0]const u8).empty;
         defer enabled_extension_names.deinit(allocator);
 
@@ -52,9 +58,9 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
 
         const queue_family_props = ret_props: {
             var familyNum: u32 = 0;
-            renderer.backend.vk.ikb.getPhysicalDeviceQueueFamilyProperties(adapter.backend.vk.physical_device, &familyNum, null);
+            rhi.renderer.instance.backend.vk.ikb.getPhysicalDeviceQueueFamilyProperties(adapter.backend.vk.physical_device, &familyNum, null);
             const res: []rhi.vulkan.vk.QueueFamilyProperties = try allocator.alloc(rhi.vulkan.vk.QueueFamilyProperties, familyNum);
-            renderer.backend.vk.ikb.getPhysicalDeviceQueueFamilyProperties(adapter.backend.vk.physical_device, &familyNum, res.ptr);
+            rhi.renderer.instance.backend.vk.ikb.getPhysicalDeviceQueueFamilyProperties(adapter.backend.vk.physical_device, &familyNum, res.ptr);
             break :ret_props res;
         };
         defer allocator.free(queue_family_props);
@@ -90,7 +96,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
             }
         }
 
-        var rhi_queues: [3]?rhi.Queue = .{null} ** 3;
+        var rhi_queues: [3]?rhi.Queue = @splat(null);
         const configured = [_]struct {
             required_bits: rhi.vulkan.vk.QueueFlags,
         }{
@@ -198,7 +204,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
         vulkan.add_next(&features, &features12);
 
         var features13: rhi.vulkan.vk.PhysicalDeviceVulkan13Features = .{ .s_type = .physical_device_vulkan_1_3_features };
-        if (renderer.backend.vk.api_version >= @as(u32, @bitCast(rhi.vulkan.vk.API_VERSION_1_3))) {
+        if (rhi.renderer.instance.backend.vk.api_version >= @as(u32, @bitCast(rhi.vulkan.vk.API_VERSION_1_3))) {
             vulkan.add_next(&features, &features13);
         }
 
@@ -221,7 +227,24 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
         if (supports_extension(enabled_extension_names.items, rhi.vulkan.vk.extensions.khr_line_rasterization.name)) {
             vulkan.add_next(&features, &line_rasterization_features);
         }
-        renderer.backend.vk.ikb.getPhysicalDeviceFeatures2(adapter.backend.vk.physical_device, &features);
+
+        // ray tracing: features are queried below via getPhysicalDeviceFeatures2 and
+        // enabled wholesale by passing the chain to createDevice
+        var accel_structure_features: rhi.vulkan.vk.PhysicalDeviceAccelerationStructureFeaturesKHR = .{ .s_type = .physical_device_acceleration_structure_features_khr };
+        if (supports_extension(enabled_extension_names.items, rhi.vulkan.vk.extensions.khr_acceleration_structure.name)) {
+            vulkan.add_next(&features, &accel_structure_features);
+        }
+
+        var ray_tracing_pipeline_features: rhi.vulkan.vk.PhysicalDeviceRayTracingPipelineFeaturesKHR = .{ .s_type = .physical_device_ray_tracing_pipeline_features_khr };
+        if (supports_extension(enabled_extension_names.items, rhi.vulkan.vk.extensions.khr_ray_tracing_pipeline.name)) {
+            vulkan.add_next(&features, &ray_tracing_pipeline_features);
+        }
+
+        var ray_query_features: rhi.vulkan.vk.PhysicalDeviceRayQueryFeaturesKHR = .{ .s_type = .physical_device_ray_query_features_khr };
+        if (supports_extension(enabled_extension_names.items, rhi.vulkan.vk.extensions.khr_ray_query.name)) {
+            vulkan.add_next(&features, &ray_query_features);
+        }
+        rhi.renderer.instance.backend.vk.ikb.getPhysicalDeviceFeatures2(adapter.backend.vk.physical_device, &features);
         //renderer.backend.vk.ikb.dispatch.vkGetPhysicalDeviceFeatures2.?(adapter.backend.vk.physical_device, &features);
         var device_create_info: rhi.vulkan.vk.DeviceCreateInfo = .{ .p_next = &features, .p_queue_create_infos = device_queue_create_info.items.ptr, .queue_create_info_count = @intCast(device_queue_create_info.items.len), .pp_enabled_extension_names = enabled_extension_names.items.ptr, .enabled_extension_count = @intCast(enabled_extension_names.items.len) };
         const device: rhi.vulkan.vk.Device = try ikb.createDevice(adapter.backend.vk.physical_device, &device_create_info, null);
@@ -279,7 +302,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
                 .device = @ptrFromInt(@intFromEnum(device)), 
                 .flags = (if (adapter.backend.vk.is_buffer_device_address_supported) @as(u32, @intCast(vma.c.VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT)) else 0) | 
                          (if (adapter.backend.vk.is_amd_device_coherent_memory_supported) @as(u32, @intCast(vma.c.VMA_ALLOCATOR_CREATE_AMD_DEVICE_COHERENT_MEMORY_BIT)) else 0), 
-                .instance = @ptrFromInt(@intFromEnum(renderer.backend.vk.instance)), 
+                .instance = @ptrFromInt(@intFromEnum(rhi.renderer.instance.backend.vk.instance)),
                 .pVulkanFunctions = &vulkan_func, 
                 .vulkanApiVersion = @bitCast(rhi.vulkan.vk.API_VERSION_1_3) 
             };
@@ -299,14 +322,33 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, adapter: *rhi
             .vma_allocator = vma_allocator,
         } } };
     }
+    if (rhi.is_target_selected(.mtl)) {
+        const mtl_device = adapter.backend.mtl.device;
+        const queue = mtl_device.newCommandQueue() orelse return error.MetalCommandQueueCreationFailed;
+        // Metal has a single device-level queue; graphics/compute/transfer all
+        // share it.
+        const graphics_queue = rhi.Queue{ .backend = .{ .mtl = .{ .queue = queue } } };
+        return .{
+            .graphics_queue = graphics_queue,
+            .compute_queue = null,
+            .transfer_queue = null,
+            .adapter = adapter.*,
+            .backend = .{ .mtl = .{ .device = mtl_device, .queue = queue } },
+        };
+    }
     return error.Unitialized;
 }
 
-pub fn deinit(self: *Device, renderer: *rhi.Renderer) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn deinit(self: *Device) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         vma.c.vmaDestroyAllocator(@ptrCast(self.backend.vk.vma_allocator));
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &self.backend.vk.dkb;
         dkb.destroyDevice(self.backend.vk.device, null);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
+        self.backend.mtl.queue.release();
+        self.backend.mtl.device.release();
         return;
     }
     unreachable;

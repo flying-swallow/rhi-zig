@@ -1,7 +1,7 @@
 const rhi = @import("root.zig");
-const vma = @import("vma");
+const vma = @import("root.zig").vma;
 const std = @import("std");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 
 pub const PipelineLayout = @This();
 pub const DescriptorType = enum(u8) {
@@ -28,8 +28,8 @@ backend: union {
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },
 
-pub fn deinit(self: *PipelineLayout, renderer: *rhi.Renderer, device: *rhi.Device) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn deinit(self: *PipelineLayout, device: *rhi.Device) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.destroyPipelineLayout(device.backend.vk.device, self.backend.vk.layout, null);
         return;
@@ -58,10 +58,10 @@ pub const DescriptorSetDesc = struct {
     dynamic_constant_buffers: []DynamicConstantBufferDesc,
 };
 
-pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.Device, desc: struct {
+pub fn init(allocator: std.mem.Allocator, device: *rhi.Device, desc: struct {
     descriptor_sets: []DescriptorSetDesc = &.{},
 }) !PipelineLayout {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const BindingSet = struct {
             register_index: u32,
@@ -146,6 +146,6 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
         const pipeline_layout: rhi.vulkan.vk.PipelineLayout = try dkb.createPipelineLayout(device.backend.vk.device, &pipeline_layout_create_info, null);
 
         return .{ .backend = .{ .vk = .{ .layout = pipeline_layout } } };
-    } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
+    } else if (rhi.is_target_selected(.dx12)) {} else if (rhi.is_target_selected(.mtl)) {}
     return error.UnsupportedRenderAPI;
 }

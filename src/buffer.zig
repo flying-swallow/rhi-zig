@@ -1,9 +1,23 @@
 const rhi = @import("root.zig");
-const vma = @import("vma");
+const vma = @import("root.zig").vma;
 const std = @import("std");
 const builtin = @import("builtin");
 
 pub const Buffer = @This();
+
+/// Where a buffer's memory lives, expressed backend-neutrally (mirrors
+/// `RIMemoryLocation_e`). Maps to a VMA memory usage + flags on Vulkan.
+pub const MemoryLocation = enum {
+    /// Device-local, not host-mapped. `mapped_region` is null; seed via the
+    /// resource uploader.
+    device,
+    /// Persistently mapped for sequential host writes.
+    host_upload,
+};
+
+/// Stable identity / descriptor-set cache key, stamped at creation (0 == empty).
+/// `Descriptor` derives its own cookie from this.
+cookie: u64 = 0,
 mapped_region: ?[]u8 = null,
 backend: union {
     vk: if (rhi.platform_has_api(.vk)) struct {
@@ -11,12 +25,13 @@ backend: union {
         allocation: vma.c.VmaAllocation = null,
     } else void,
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
-    mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    mtl: if (rhi.platform_has_api(.mtl)) struct {
+        buffer: rhi.metal.mtl.Buffer,
+    } else void,
 } = undefined,
 
 //  General buffer initialization function
 pub fn init_general(
-    renderer: *rhi.Renderer,
     device: *rhi.Device,
     options: struct {
         size: usize,
@@ -28,6 +43,10 @@ pub fn init_general(
             // zig fmt: off
             shader_resource: bool = false,                     // SHADER_RESOURCE                          Read-only shader resource (SRV)
             shader_resource_storage: bool = false,             // SHADER_RESOURCE_STORAGE                  Read/write shader resource (UAV)
+            transfer_src: bool = true,                         // TRANSFER_SRC                             Source of a copy (defaults on for parity)
+            transfer_dst: bool = true,                         // TRANSFER_DST                             Destination of a copy (defaults on for parity)
+            indirect: bool = false,                            // INDIRECT                                 Source of indirect draw/dispatch args
+            device_address: bool = false,                      // DEVICE_ADDRESS                           Addressable as a raw GPU pointer (BDA)
             vertex_buffer: bool = false,                       // VERTEX_BUFFER                            Vertex buffer
             index_buffer: bool = false,                        // INDEX_BUFFER                             Index buffer
             constant_buffer: bool = false,                     // CONSTANT_BUFFER                          Constant buffer (D3D11: can't be combined with other usages)
@@ -43,16 +62,16 @@ pub fn init_general(
         buffer_usage: enum { auto, prefer_device, prefer_host } = .auto,
     },
 ) !Buffer {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         // zig fmt: off
         var usage  = rhi.vulkan.vk.BufferUsageFlags{
-            .shader_device_address_bit = device.adapter.backend.vk.is_buffer_device_address_supported,
-            .transfer_dst_bit = true,
-            .transfer_src_bit = true,
+            .shader_device_address_bit = device.adapter.backend.vk.is_buffer_device_address_supported or options.usage.device_address,
+            .transfer_dst_bit = options.usage.transfer_dst,
+            .transfer_src_bit = options.usage.transfer_src,
             .vertex_buffer_bit = options.usage.vertex_buffer,
             .index_buffer_bit = options.usage.index_buffer,
             .uniform_buffer_bit = options.usage.constant_buffer,
-            .indirect_buffer_bit = options.usage.argument_buffer,
+            .indirect_buffer_bit = options.usage.argument_buffer or options.usage.indirect,
             .storage_buffer_bit = options.usage.scratch_buffer,
             .shader_binding_table_bit_khr = options.usage.shader_binding_table,
             .acceleration_structure_storage_bit_khr = options.usage.acceleration_structure_storage,
@@ -101,6 +120,7 @@ pub fn init_general(
             &vma_info)));
         // zig fmt: on
         return .{
+            .cookie = rhi.next_cookie(),
             .backend = .{ .vk = .{
                 .buffer = @enumFromInt(@intFromPtr(vk_buffer)),
                 .allocation = vma_alloc,
@@ -111,18 +131,39 @@ pub fn init_general(
                 null,
         };
     }
+    if (rhi.is_target_selected(.mtl)) {
+        // Shared storage: the buffer is CPU-visible, so `mapped_region` points
+        // straight at its contents (no staging/blit needed on Apple Silicon).
+        const buffer = device.backend.mtl.device.newBuffer(options.size, .{ .storage_mode = .shared }) orelse
+            return error.MetalBufferCreationFailed;
+        const contents = buffer.contents();
+        return .{
+            .cookie = rhi.next_cookie(),
+            .backend = .{ .mtl = .{ .buffer = buffer } },
+            .mapped_region = if (contents) |p| @as([*]u8, @ptrCast(p))[0..options.size] else null,
+        };
+    }
     unreachable;
 }
 
-pub fn deinit(self: *Buffer, renderer: *rhi.Renderer, device: *rhi.Device) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+/// An unset / not-yet-created buffer (cookie 0). A descriptor built from an
+/// empty buffer is itself empty.
+pub fn isEmpty(self: Buffer) bool {
+    return self.cookie == 0;
+}
+
+pub fn deinit(self: *Buffer, device: *rhi.Device) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         vma.c.vmaDestroyBuffer(
             device.backend.vk.vma_allocator,
             @ptrFromInt(@intFromEnum(self.backend.vk.buffer)), self.backend.vk.allocation);
         return;
-    } 
+    }
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
+        self.backend.mtl.buffer.release();
+        return;
+    }
     unreachable;
-   
 }
 
 //pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, options: struct {

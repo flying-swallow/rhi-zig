@@ -1,10 +1,16 @@
 const rhi = @import("root.zig");
-const vulkan = @import("vulkan.zig");
+const vulkan = @import("root.zig").vulkan;
 const std = @import("std");
 const assert = std.debug.assert;
 const builtin = @import("builtin");
 
 pub const Renderer = @This();
+
+/// The single global renderer instance. There is only ever one renderer per
+/// application, so it is a global singleton rather than a value threaded through
+/// the API. Populated by `init`; referenced elsewhere as `rhi.renderer.instance`.
+pub var instance: Renderer = undefined;
+
 backend: union(rhi.Backend) {
     vk: if (rhi.platform_has_api(.vk)) struct {
         api_version: u32,
@@ -17,28 +23,29 @@ backend: union(rhi.Backend) {
     mtl: if (rhi.platform_has_api(.mtl)) void else void 
 },
 
-pub fn apiString(self: *Renderer) []const u8 {
-    return switch (self.backend) {
+pub fn apiString() []const u8 {
+    return switch (instance.backend) {
         .vk => "Vulkan",
         .dx12 => "DirectX 12",
         .mtl => "Metal",
     };
 }
 
-pub fn target_api(self: *Renderer) rhi.Backend {
-    if (self.backend == .vk and comptime rhi.platform_has_api(.vk)) {
+pub fn target_api() rhi.Backend {
+    if (instance.backend == .vk and comptime rhi.platform_has_api(.vk)) {
         return .vk;
     }
-    if (self.backend == .dx12 and comptime rhi.platform_has_api(.dx12)) {
+    if (instance.backend == .dx12 and comptime rhi.platform_has_api(.dx12)) {
         return .dx12;
     }
-    if (self.backend == .mtl and comptime rhi.platform_has_api(.mtl)) {
+    if (instance.backend == .mtl and comptime rhi.platform_has_api(.mtl)) {
         return .mtl;
     }
     unreachable;
 }
 
-pub fn deinit(renderer: *Renderer) void {
+pub fn deinit() void {
+    const renderer = &instance;
     switch (renderer.backend) {
         .vk => |vk| {
             _ = vk;
@@ -58,9 +65,10 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
     vk: struct { app_name: [*:0]const u8, enable_validation_layer: bool },
     dx12: struct {},
     mtl: struct {},
-}) !Renderer {
+}) !void {
     switch (impl) {
         .vk => |opt| {
+          if (comptime rhi.platform_has_api(.vk)) {
             var dynLib = switch (builtin.os.tag) {
                 .windows => p: {
                     break :p std.DynLib.open("vulkan-1.dll") catch |err| {
@@ -174,33 +182,38 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
             if (impl.vk.enable_validation_layer) {
                 vulkan.add_next(&instanceCreateInfo, &validationFeatures);
             }
-            const instance: rhi.vulkan.vk.Instance = try loader.createInstance(&instanceCreateInfo, null);
-            var instance_wrapper = rhi.vulkan.vk.InstanceWrapper.load(instance, loader.dispatch.vkGetInstanceProcAddr.?);
+            const vk_instance: rhi.vulkan.vk.Instance = try loader.createInstance(&instanceCreateInfo, null);
+            var instance_wrapper = rhi.vulkan.vk.InstanceWrapper.load(vk_instance, loader.dispatch.vkGetInstanceProcAddr.?);
 
             var debug_message_util: ?rhi.vulkan.vk.DebugUtilsMessengerEXT = null;
             if (impl.vk.enable_validation_layer and instance_wrapper.dispatch.vkCreateDebugUtilsMessengerEXT != null) {
                 var debug_create_info = rhi.vulkan.vk.DebugUtilsMessengerCreateInfoEXT{ .s_type = .debug_utils_messenger_create_info_ext, .pfn_user_callback = &vulkan.VKDebugMessengerUtility, .message_severity = .{ .info_bit_ext = true, .warning_bit_ext = true, .error_bit_ext = true }, .message_type = .{ .general_bit_ext = true, .validation_bit_ext = true, .performance_bit_ext = true } };
-                debug_message_util = try instance_wrapper.createDebugUtilsMessengerEXT(instance, &debug_create_info, null);
+                debug_message_util = try instance_wrapper.createDebugUtilsMessengerEXT(vk_instance, &debug_create_info, null);
             }
 
-            return Renderer{ .backend = .{ .vk = .{
+            Renderer.instance = Renderer{ .backend = .{ .vk = .{
                 .api_version = app_info.api_version,
-                .instance = instance,
+                .instance = vk_instance,
                 .ikb = instance_wrapper,
                 .debug_message_utils = debug_message_util,
                 .vkb = loader,
             } } };
+            return;
+          }
+          return error.VulkanNotSupported;
         },
         .dx12 => {
             if (rhi.platform_has_api(.dx12)) {
-                return Renderer{ .backend = .{ .dx12 = {} } };
+                Renderer.instance = Renderer{ .backend = .{ .dx12 = {} } };
+                return;
             }
             return error.DirectX12NotSupported;
             //@panic("DirectX 12 target not supported in this build configuration");
         },
         .mtl => {
             if (rhi.platform_has_api(.mtl)) {
-                return Renderer{ .backend = .{ .mtl = {} } };
+                Renderer.instance = Renderer{ .backend = .{ .mtl = {} } };
+                return;
             }
             return error.MetalNotSupported;
         },
