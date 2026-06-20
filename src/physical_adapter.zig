@@ -32,6 +32,10 @@ backend: union {
         is_amd_device_coherent_memory_supported: bool = false,
         is_present_id_supported: bool = false,
         is_maintenance5_supported: bool = false,
+        is_acceleration_structure_supported: bool = false,
+        is_ray_tracing_pipeline_supported: bool = false,
+        is_ray_query_supported: bool = false,
+        is_deferred_host_operations_supported: bool = false,
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
     mtl: if (rhi.platform_has_api(.mtl)) struct {
@@ -85,11 +89,11 @@ buffer_max_size: u64 = 0,
 
 // Memory alignment
 upload_buffer_texture_row_alignment: u32 = 0,
-upload_buffer_texture_slice_alignment: u32 = 0,
+upload_buffer_offset_alignment: u32 = 0,
 buffer_shader_resource_offset_alignment: u32 = 0,
 constant_buffer_offset_alignment: u32 = 0,
-// scratch_buffer_offset_alignment: u32, // commented out
-// shader_binding_table_alignment: u32, // commented out
+scratch_buffer_offset_alignment: u32 = 0,
+shader_binding_table_alignment: u32 = 0,
 
 // Pipeline layout
 pipeline_layout_descriptor_set_max_num: u32 = 0,
@@ -143,6 +147,12 @@ compute_shader_shared_memory_max_size: u32 = 0,
 compute_shader_work_group_max_num: [3]u32 = [_]u32{ 0, 0, 0 },
 compute_shader_work_group_invocation_max_num: u32 = 0,
 compute_shader_work_group_max_dim: [3]u32 = [_]u32{ 0, 0, 0 },
+
+// Ray tracing
+ray_tracing_shader_group_identifier_size: u32 = 0,
+ray_tracing_shader_table_max_stride: u32 = 0,
+ray_tracing_shader_recursion_max_depth: u32 = 0,
+ray_tracing_geometry_object_max_num: u32 = 0,
 
 // Precision bits
 viewport_precision_bits: u32 = 0,
@@ -219,13 +229,13 @@ pub fn default_select_adapter(adapters: []const PhysicalAdapter) usize {
     return selected_adapter_index;
 }
 
-pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer) !std.ArrayList(PhysicalAdapter) {
+pub fn enumerate_adapters(allocator: std.mem.Allocator) !std.ArrayList(PhysicalAdapter) {
     var result = std.ArrayList(PhysicalAdapter).empty;
     errdefer result.deinit(allocator);
-    if (rhi.is_target_selected(.vk, renderer)) {
-        var ikb: *rhi.vulkan.vk.InstanceWrapper = &renderer.backend.vk.ikb;
+    if (rhi.is_target_selected(.vk)) {
+        var ikb: *rhi.vulkan.vk.InstanceWrapper = &rhi.renderer.instance.backend.vk.ikb;
         var deviceGroupsCount: u32 = 0;
-        _ = try ikb.enumeratePhysicalDevices(renderer.backend.vk.instance, &deviceGroupsCount, null);
+        _ = try ikb.enumeratePhysicalDevices(rhi.renderer.instance.backend.vk.instance, &deviceGroupsCount, null);
         const physicalDeviceProperties = try allocator.alloc(rhi.vulkan.vk.PhysicalDeviceGroupProperties, deviceGroupsCount);
         for (physicalDeviceProperties) |*p| {
             p.* = .{
@@ -235,7 +245,7 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
             };
         }
         defer allocator.free(physicalDeviceProperties);
-        _ = try ikb.enumeratePhysicalDeviceGroups(renderer.backend.vk.instance, &deviceGroupsCount, physicalDeviceProperties.ptr);
+        _ = try ikb.enumeratePhysicalDeviceGroups(rhi.renderer.instance.backend.vk.instance, &deviceGroupsCount, physicalDeviceProperties.ptr);
         var i: usize = 0;
         while (i < deviceGroupsCount) : (i += 1) {
             const physical_device = physicalDeviceProperties[i].physical_devices[0];
@@ -255,11 +265,26 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
             props13.s_type = .physical_device_vulkan_1_3_properties;
             var device_id_properties = std.mem.zeroes(rhi.vulkan.vk.PhysicalDeviceIDProperties);
             device_id_properties.s_type = .physical_device_id_properties;
+            var accel_structure_properties = std.mem.zeroes(rhi.vulkan.vk.PhysicalDeviceAccelerationStructurePropertiesKHR);
+            accel_structure_properties.s_type = .physical_device_acceleration_structure_properties_khr;
+            var ray_tracing_pipeline_properties = std.mem.zeroes(rhi.vulkan.vk.PhysicalDeviceRayTracingPipelinePropertiesKHR);
+            ray_tracing_pipeline_properties.s_type = .physical_device_ray_tracing_pipeline_properties_khr;
+
+            const has_acceleration_structure = rhi.vulkan.vk_has_extension(extension_properties, rhi.vulkan.vk.extensions.khr_acceleration_structure.name);
+            const has_ray_tracing_pipeline = rhi.vulkan.vk_has_extension(extension_properties, rhi.vulkan.vk.extensions.khr_ray_tracing_pipeline.name);
+            const has_ray_query = rhi.vulkan.vk_has_extension(extension_properties, rhi.vulkan.vk.extensions.khr_ray_query.name);
+            const has_deferred_host_operations = rhi.vulkan.vk_has_extension(extension_properties, rhi.vulkan.vk.extensions.khr_deferred_host_operations.name);
 
             rhi.vulkan.add_next(&properties, &props11);
             rhi.vulkan.add_next(&properties, &props12);
             rhi.vulkan.add_next(&properties, &props13);
             rhi.vulkan.add_next(&properties, &device_id_properties);
+            if (has_acceleration_structure) {
+                rhi.vulkan.add_next(&properties, &accel_structure_properties);
+            }
+            if (has_ray_tracing_pipeline) {
+                rhi.vulkan.add_next(&properties, &ray_tracing_pipeline_properties);
+            }
 
             var features = std.mem.zeroes(rhi.vulkan.vk.PhysicalDeviceFeatures2);
             features.s_type = .physical_device_features_2;
@@ -267,6 +292,9 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
             var features12: rhi.vulkan.vk.PhysicalDeviceVulkan12Features = .{ .s_type = .physical_device_vulkan_1_2_features };
             var features13: rhi.vulkan.vk.PhysicalDeviceVulkan13Features = .{ .s_type = .physical_device_vulkan_1_3_features };
             var present_id_features: rhi.vulkan.vk.PhysicalDevicePresentIdFeaturesKHR = .{ .s_type = .physical_device_present_id_features_khr };
+            var accel_structure_features: rhi.vulkan.vk.PhysicalDeviceAccelerationStructureFeaturesKHR = .{ .s_type = .physical_device_acceleration_structure_features_khr };
+            var ray_tracing_pipeline_features: rhi.vulkan.vk.PhysicalDeviceRayTracingPipelineFeaturesKHR = .{ .s_type = .physical_device_ray_tracing_pipeline_features_khr };
+            var ray_query_features: rhi.vulkan.vk.PhysicalDeviceRayQueryFeaturesKHR = .{ .s_type = .physical_device_ray_query_features_khr };
 
             rhi.vulkan.add_next(&features, &features11);
             rhi.vulkan.add_next(&features, &features12);
@@ -274,6 +302,15 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
 
             if (rhi.vulkan.vk_has_extension(extension_properties, rhi.vulkan.vk.extensions.khr_present_id.name[0..])) {
                 rhi.vulkan.add_next(&features, &present_id_features);
+            }
+            if (has_acceleration_structure) {
+                rhi.vulkan.add_next(&features, &accel_structure_features);
+            }
+            if (has_ray_tracing_pipeline) {
+                rhi.vulkan.add_next(&features, &ray_tracing_pipeline_features);
+            }
+            if (has_ray_query) {
+                rhi.vulkan.add_next(&features, &ray_query_features);
             }
 
             //var memory_properties = std.mem.zeroes(rhi.vulkan.vk.PhysicalDeviceMemoryProperties);
@@ -299,6 +336,10 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
                     .is_buffer_device_address_supported = properties.properties.api_version >= @as(u32, @bitCast(rhi.vulkan.vk.API_VERSION_1_2)) or rhi.vulkan.vk_has_extension(extension_properties, rhi.vulkan.vk.extensions.khr_buffer_device_address.name),
                     .is_amd_device_coherent_memory_supported = rhi.vulkan.vk_has_extension(extension_properties, rhi.vulkan.vk.extensions.amd_device_coherent_memory.name),
                     .is_maintenance5_supported = rhi.vulkan.vk_has_extension(extension_properties, rhi.vulkan.vk.extensions.khr_maintenance_5.name),
+                    .is_acceleration_structure_supported = has_acceleration_structure and accel_structure_features.acceleration_structure == .true,
+                    .is_ray_tracing_pipeline_supported = has_ray_tracing_pipeline and ray_tracing_pipeline_features.ray_tracing_pipeline == .true,
+                    .is_ray_query_supported = has_ray_query and ray_query_features.ray_query == .true,
+                    .is_deferred_host_operations_supported = has_deferred_host_operations,
                 } },
                 .preset_level = blk: {
                     for (gpu_preset.desktop_presets) |preset| {
@@ -346,11 +387,11 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
                 .buffer_max_size = props13.max_buffer_size,
 
                 .upload_buffer_texture_row_alignment = @intCast(limits.optimal_buffer_copy_row_pitch_alignment),
-                .upload_buffer_texture_slice_alignment = @intCast(limits.optimal_buffer_copy_offset_alignment),
+                .upload_buffer_offset_alignment = @intCast(limits.optimal_buffer_copy_offset_alignment),
                 .buffer_shader_resource_offset_alignment = @intCast(@max(limits.min_texel_buffer_offset_alignment, limits.min_storage_buffer_offset_alignment)),
                 .constant_buffer_offset_alignment = @intCast(limits.min_uniform_buffer_offset_alignment),
-                // physicalAdapter->scratchBufferOffsetAlignment = accelerationStructureProps.minAccelerationStructureScratchOffsetAlignment;
-                // physicalAdapter->shaderBindingTableAlignment = rayTracingProps.shaderGroupBaseAlignment;
+                .scratch_buffer_offset_alignment = if (has_acceleration_structure) accel_structure_properties.min_acceleration_structure_scratch_offset_alignment else 0,
+                .shader_binding_table_alignment = if (has_ray_tracing_pipeline) ray_tracing_pipeline_properties.shader_group_base_alignment else 0,
 
                 .pipeline_layout_descriptor_set_max_num = limits.max_bound_descriptor_sets,
                 .pipeline_layout_root_constant_max_size = limits.max_push_constants_size,
@@ -396,6 +437,11 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
                 .compute_shader_work_group_max_num = [_]u32{ limits.max_compute_work_group_count[0], limits.max_compute_work_group_count[1], limits.max_compute_work_group_count[2] },
                 .compute_shader_work_group_invocation_max_num = limits.max_compute_work_group_invocations,
                 .compute_shader_work_group_max_dim = [_]u32{ limits.max_compute_work_group_size[0], limits.max_compute_work_group_size[1], limits.max_compute_work_group_size[2] },
+
+                .ray_tracing_shader_group_identifier_size = if (has_ray_tracing_pipeline) ray_tracing_pipeline_properties.shader_group_handle_size else 0,
+                .ray_tracing_shader_table_max_stride = if (has_ray_tracing_pipeline) ray_tracing_pipeline_properties.max_shader_group_stride else 0,
+                .ray_tracing_shader_recursion_max_depth = if (has_ray_tracing_pipeline) ray_tracing_pipeline_properties.max_ray_recursion_depth else 0,
+                .ray_tracing_geometry_object_max_num = if (has_acceleration_structure) @intCast(@min(accel_structure_properties.max_geometry_count, std.math.maxInt(u32))) else 0,
 
                 .viewport_precision_bits = limits.viewport_sub_pixel_bits,
                 .sub_pixel_precision_bits = limits.sub_pixel_precision_bits,
@@ -469,7 +515,7 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator, renderer: *rhi.Renderer)
             try result.append(allocator, physical_adapter);
         }
     }
-    if (rhi.is_target_selected(.mtl, renderer)) {
+    if (rhi.is_target_selected(.mtl)) {
         // Metal exposes a single default device on macOS/iOS.
         const device = rhi.metal.mtl.createSystemDefaultDevice() orelse return error.MetalDeviceNotFound;
         var physical_adapter: PhysicalAdapter = .{ .backend = .{ .mtl = .{ .device = device } } };

@@ -2,138 +2,6 @@ const rhi = @import("root.zig");
 const vulkan = @import("root.zig").vulkan;
 const std = @import("std");
 
-pub const StageBits = struct {
-    index_input: bool = false, //    index buffer consumption
-    vertex_shader: bool = false, //    vertex shader
-    tess_control_shader: bool = false, //    tessellation control (hull) shader
-    tess_evaluation_shader: bool = false, //    tessellation evaluation (domain) shader
-    geometry_shader: bool = false, //    geometry shader
-    mesh_control_shader: bool = false, //    mesh control (task) shader
-    mesh_evaluation_shader: bool = false, //    mesh evaluation (amplification) shader
-    fragment_shader: bool = false, //    fragment (pixel) shader
-    depth_stencil_attachment: bool = false, //    depth-stencil r/w operations
-    color_attachment: bool = false, //    color r/w operations
-
-    // compute                                    // invoked by  "cmddispatch*" (not rays)
-    compute_shader: bool = false, //    compute shader
-
-    // ray tracing                                // invoked by "cmddispatchrays*"
-    raygen_shader: bool = false, //    ray generation shader
-    miss_shader: bool = false, //    miss shader
-    intersection_shader: bool = false, //    intersection shader
-    closest_hit_shader: bool = false, //    closest hit shader
-    any_hit_shader: bool = false, //    any hit shader
-    callable_shader: bool = false, //    callable shader
-
-    acceleration_structure: bool, // invoked by "cmd*accelerationstructure*"
-
-    // copy
-    copy: bool = false, // invoked by "cmdcopy*", "cmdupload*" and "cmdreadback*"
-    clear_storage: bool = false, // invoked by "cmdclearstorage*"
-    resolve: bool = false, // invoked by "cmdresolvetexture"
-
-    // modifiers
-    indirect: bool = false, // invoked by "indirect" command (used in addition to other bits)
-};
-
-//pub const StageBits = enum(u32) {
-//    // Special
-//    all = 0, // lazy default for barriers
-//    none = 0x7fffffff,
-//
-//    // graphics                                   // invoked by "cmddraw*"
-//    index_input = 1 << 0, //    index buffer consumption
-//    vertex_shader = 1 << 1, //    vertex shader
-//    tess_control_shader = 1 << 2, //    tessellation control (hull) shader
-//    tess_evaluation_shader = 1 << 3, //    tessellation evaluation (domain) shader
-//    geometry_shader = 1 << 4, //    geometry shader
-//    mesh_control_shader = 1 << 5, //    mesh control (task) shader
-//    mesh_evaluation_shader = 1 << 6, //    mesh evaluation (amplification) shader
-//    fragment_shader = 1 << 7, //    fragment (pixel) shader
-//    depth_stencil_attachment = 1 << 8, //    depth-stencil r/w operations
-//    color_attachment = 1 << 9, //    color r/w operations
-//
-//    // compute                                    // invoked by  "cmddispatch*" (not rays)
-//    compute_shader = 1 << 10, //    compute shader
-//
-//    // ray tracing                                // invoked by "cmddispatchrays*"
-//    raygen_shader = 1 << 11, //    ray generation shader
-//    miss_shader = 1 << 12, //    miss shader
-//    intersection_shader = 1 << 13, //    intersection shader
-//    closest_hit_shader = 1 << 14, //    closest hit shader
-//    any_hit_shader = 1 << 15, //    any hit shader
-//    callable_shader = 1 << 16, //    callable shader
-//
-//    acceleration_structure = 1 << 17, // invoked by "cmd*accelerationstructure*"
-//
-//    // copy
-//    copy = 1 << 18, // invoked by "cmdcopy*", "cmdupload*" and "cmdreadback*"
-//    clear_storage = 1 << 19, // invoked by "cmdclearstorage*"
-//    resolve = 1 << 20, // invoked by "cmdresolvetexture"
-//
-//    // modifiers
-//    indirect = 1 << 21, // invoked by "indirect" command (used in addition to other bits)
-//
-//    // umbrella stages
-//    tessellation_shaders = .tess_control_shader | .tess_evaluation_shader,
-//    mesh_shaders = .mesh_control_shader | .mesh_evaluation_shader,
-//
-//    graphics_shaders = .vertex_shader |
-//        .tessellation_shaders |
-//        .geometry_shader |
-//        .mesh_shaders |
-//        .fragment_shader,
-//
-//    // invoked by "cmddispatchrays"
-//    ray_tracing_shaders = .raygen_shader |
-//        .miss_shader |
-//        .intersection_shader |
-//        .closest_hit_shader |
-//        .any_hit_shader |
-//        .callable_shader,
-//
-//    // invoked by "cmddraw*"
-//    draw = .index_input |
-//        .graphics_shaders |
-//        .depth_stencil_attachment |
-//        .color_attachment,
-//
-//};
-
-pub const AccessBits = struct {
-    index_buffer: bool = false,
-    vertex_buffer: bool = false,
-    constant_buffer: bool = false,
-    shader_resource: bool = false,
-    shader_resource_storage: bool = false,
-    argument_buffer: bool = false,
-    color_attachment: bool = false,
-    depth_stencil_attachment_write: bool = false,
-    depth_stencil_attachment_read: bool = false,
-    copy_source: bool = false,
-    copy_destination: bool = false,
-    resolve_source: bool = false,
-    resolve_destination: bool = false,
-    acceleration_structure_read: bool = false,
-    acceleration_structure_write: bool = false,
-    shading_rate_attachment: bool = false,
-};
-
-pub const Layout = enum(u8) {
-    undefined = 0,
-    color_attachment = 1,
-    depth_stencil_attachment = 2,
-    depth_stencil_read_only = 3,
-    shader_resource = 4,
-    shader_resource_storage = 5,
-    copy_source = 6,
-    copy_destination = 7,
-    resolve_source = 8,
-    resolve_destination = 9,
-    present = 10,
-    shading_rate_attachment = 11,
-};
-
 pub const Pool = struct {
     pub const Self = @This();
     backend: union {
@@ -148,33 +16,33 @@ pub const Pool = struct {
         mtl: void, // Metal does not use command pools
     },
 
-    pub fn reset(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device) !void {
-        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    pub fn reset(self: *Self, device: *rhi.Device) !void {
+        if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             try dkb.resetCommandPool(device.backend.vk.device, self.backend.vk.pool, .{});
             return;
         }
-        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
             // Metal has no command pools; command buffers are transient.
             return;
         }
         unreachable;
     }
 
-    pub fn deinit(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device) void {
-        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    pub fn deinit(self: *Self, device: *rhi.Device) void {
+        if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             dkb.destroyCommandPool(device.backend.vk.device, self.backend.vk.pool, null);
             return;
         }
-        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
             return;
         }
         unreachable;
     }
 
-    pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, queue: *rhi.Queue) !Self {
-        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    pub fn init(device: *rhi.Device, queue: *rhi.Queue) !Self {
+        if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             var cmd_pool_create_info = rhi.vulkan.vk.CommandPoolCreateInfo{
                 .flags = .{
@@ -188,7 +56,7 @@ pub const Pool = struct {
                 .pool = pool,
             } } };
         }
-        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
             return .{ .backend = .{ .mtl = {} } };
         }
         return error.UnsupportedBackend;
@@ -208,14 +76,14 @@ pub const CommandRingElement = struct {
         mtl: if (rhi.platform_has_api(.mtl)) void else void,
     },
 
-    pub fn wait(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device) !void {
-        if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    pub fn wait(self: *Self, device: *rhi.Device) !void {
+        if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             var fences = [_]rhi.vulkan.vk.Fence{self.backend.vk.fence};
             _ = try dkb.waitForFences(device.backend.vk.device, fences[0..], .true, std.math.maxInt(u64));
             return;
         }
-        if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+        if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
             // CPU/GPU frame pacing on Metal is provided implicitly by
             // CAMetalLayer.nextDrawable, which blocks once the maximum number of
             // drawables is in flight. (An MTLSharedEvent could give finer-grained
@@ -253,8 +121,9 @@ pub fn CommandRingBuffer(
             self.cmd_index = 0;
             self.fence_index = 0;
         }
-        pub fn get(self: *Self, renderer: *rhi.Renderer, num_cmds: usize) CommandRingElement {
-            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        pub fn get(self: *Self, device: *rhi.Device, num_cmds: usize) CommandRingElement {
+            _ = device; // kept for a uniform (renderer, device) calling convention
+            if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
                 std.debug.assert(num_cmds <= options.cmd_per_pool);
                 std.debug.assert(num_cmds + self.cmd_index <= options.cmd_per_pool);
                 const result = CommandRingElement{ .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds], .pool = &self.pools[self.pool_index], .backend = .{ .vk = .{
@@ -265,7 +134,7 @@ pub fn CommandRingBuffer(
                 self.cmd_index += num_cmds;
                 return result;
             }
-            if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+            if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
                 std.debug.assert(num_cmds <= options.cmd_per_pool);
                 std.debug.assert(num_cmds + self.cmd_index <= options.cmd_per_pool);
                 const result = CommandRingElement{
@@ -279,17 +148,17 @@ pub fn CommandRingBuffer(
             }
             unreachable;
         }
-        pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, queue: *rhi.Queue) !Self {
-            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        pub fn init(device: *rhi.Device, queue: *rhi.Queue) !Self {
+            if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
                 var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
                 var cmds: [options.pool_count][options.cmd_per_pool]rhi.Cmd = undefined;
                 var pools: [options.pool_count]rhi.Pool = undefined;
                 var semaphores: if (options.sync_primative) [options.pool_count][options.cmd_per_pool]rhi.vulkan.vk.Semaphore else void = undefined;
                 var fences: if (options.sync_primative) [options.pool_count][options.cmd_per_pool]rhi.vulkan.vk.Fence else void = undefined;
                 for (0..options.pool_count) |pool_index| {
-                    pools[pool_index] = try rhi.Pool.init(renderer, device, queue);
+                    pools[pool_index] = try rhi.Pool.init(device, queue);
                     for (0..options.cmd_per_pool) |cmd_index| {
-                        cmds[pool_index][cmd_index] = try rhi.Cmd.init(renderer, device, &pools[pool_index]);
+                        cmds[pool_index][cmd_index] = try rhi.Cmd.init(device, &pools[pool_index]);
                         if (options.sync_primative) {
                             var semaphore_create_info = rhi.vulkan.vk.SemaphoreCreateInfo{ .s_type = .semaphore_create_info };
                             semaphores[pool_index][cmd_index] = try dkb.createSemaphore(device.backend.vk.device, &semaphore_create_info, null);
@@ -308,13 +177,13 @@ pub fn CommandRingBuffer(
                     .fences = fences,
                 } } };
             }
-            if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+            if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
                 var cmds: [options.pool_count][options.cmd_per_pool]rhi.Cmd = undefined;
                 var pools: [options.pool_count]rhi.Pool = undefined;
                 for (0..options.pool_count) |pool_index| {
-                    pools[pool_index] = try rhi.Pool.init(renderer, device, queue);
+                    pools[pool_index] = try rhi.Pool.init(device, queue);
                     for (0..options.cmd_per_pool) |cmd_index| {
-                        cmds[pool_index][cmd_index] = try rhi.Cmd.init(renderer, device, &pools[pool_index]);
+                        cmds[pool_index][cmd_index] = try rhi.Cmd.init(device, &pools[pool_index]);
                     }
                 }
                 return .{ .pool_index = options.pool_count, .cmd_index = 0, .fence_index = 0, .cmds = cmds, .pools = pools, .backend = .{ .mtl = {} } };
@@ -323,8 +192,8 @@ pub fn CommandRingBuffer(
             unreachable; // should never reach here
         }
 
-        pub fn deinit(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device) void {
-            if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+        pub fn deinit(self: *Self, device: *rhi.Device) void {
+            if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
                 var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
                 for (0..options.pool_count) |pool_index| {
                     if (options.sync_primative) {
@@ -334,16 +203,16 @@ pub fn CommandRingBuffer(
                         }
                     }
                     for (0..options.cmd_per_pool) |cmd_index| {
-                        self.cmds[pool_index][cmd_index].deinit(renderer, device, &self.pools[pool_index]);
+                        self.cmds[pool_index][cmd_index].deinit(device, &self.pools[pool_index]);
                     }
                     dkb.destroyCommandPool(device.backend.vk.device, self.pools[pool_index].backend.vk.pool, null);
                 }
                 return;
             }
-            if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+            if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
                 for (0..options.pool_count) |pool_index| {
                     for (0..options.cmd_per_pool) |cmd_index| {
-                        self.cmds[pool_index][cmd_index].deinit(renderer, device, &self.pools[pool_index]);
+                        self.cmds[pool_index][cmd_index].deinit(device, &self.pools[pool_index]);
                     }
                 }
                 return;
@@ -370,8 +239,8 @@ backend: union {
     } else void,
 },
 
-pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, pool: *Pool) !Cmd {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn init(device: *rhi.Device, pool: *Pool) !Cmd {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var command_allocate_info = rhi.vulkan.vk.CommandBufferAllocateInfo{
             .command_pool = pool.backend.vk.pool,
@@ -384,14 +253,14 @@ pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, pool: *Pool) !Cmd {
             .cmd = command[0],
         } } };
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         return .{ .backend = .{ .mtl = .{ .queue = device.backend.mtl.queue } } };
     }
     unreachable;
 }
 
-pub fn deinit(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, pool: *Pool) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn deinit(self: *Cmd, device: *rhi.Device, pool: *Pool) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var command = [_]rhi.vulkan.vk.CommandBuffer{
             self.backend.vk.cmd,
@@ -399,14 +268,14 @@ pub fn deinit(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, pool: *P
         dkb.freeCommandBuffers(device.backend.vk.device, pool.backend.vk.pool, command[0..]);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         return;
     }
     unreachable;
 }
 
-pub fn begin(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) !void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn begin(self: *Cmd, device: *rhi.Device) !void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var begin_info = rhi.vulkan.vk.CommandBufferBeginInfo{
             .s_type = .command_buffer_begin_info,
@@ -417,7 +286,7 @@ pub fn begin(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) !void {
         try dkb.beginCommandBuffer(self.backend.vk.cmd, &begin_info);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.cmd = self.backend.mtl.queue.commandBuffer() orelse return error.MetalCommandBufferFailed;
         self.backend.mtl.encoder = null;
         return;
@@ -425,13 +294,13 @@ pub fn begin(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) !void {
     unreachable;
 }
 
-pub fn end(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) !void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn end(self: *Cmd, device: *rhi.Device) !void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         try dkb.endCommandBuffer(self.backend.vk.cmd);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         // Commit happens in Swapchain.frame_submit.
         return;
     }
@@ -466,87 +335,6 @@ pub const ColorAttachment = struct {
     clear_color: [4]f32 = .{ 0, 0, 0, 1 },
 };
 
-pub const ImageBarrier = struct {
-    image: *rhi.Image,
-    old_layout: Layout,
-    new_layout: Layout,
-    aspect: enum { color, depth } = .color,
-};
-
-/// Insert image memory barriers. Real on Vulkan; a no-op on Metal. `reserve` is
-/// the stack-allocated barrier capacity (compile-time); `image_barriers.len`
-/// must not exceed it.
-pub fn pipeline_barrier(self: *Cmd, comptime reserve: usize, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
-    image_barriers: []const ImageBarrier,
-}) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
-        if (options.image_barriers.len == 0) return;
-        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
-        std.debug.assert(options.image_barriers.len <= reserve);
-        var vk_barriers: [reserve]rhi.vulkan.vk.ImageMemoryBarrier2 = undefined;
-        for (options.image_barriers, 0..) |b, i| {
-            vk_barriers[i] = .{
-                .src_stage_mask = .{},
-                .src_access_mask = .{},
-                .dst_stage_mask = .{},
-                .dst_access_mask = .{},
-                .old_layout = vk_image_layout(b.old_layout),
-                .new_layout = vk_image_layout(b.new_layout),
-                .src_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
-                .dst_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
-                .image = b.image.backend.vk.image,
-                .subresource_range = .{
-                    .aspect_mask = switch (b.aspect) {
-                        .color => .{ .color_bit = true },
-                        .depth => .{ .depth_bit = true },
-                    },
-                    .base_mip_level = 0,
-                    .level_count = 1,
-                    .base_array_layer = 0,
-                    .layer_count = 1,
-                },
-            };
-            switch (b.new_layout) {
-                .color_attachment => {
-                    vk_barriers[i].dst_stage_mask = .{ .color_attachment_output_bit = true };
-                    vk_barriers[i].dst_access_mask = .{ .color_attachment_write_bit = true };
-                },
-                .depth_stencil_attachment => {
-                    vk_barriers[i].dst_stage_mask = .{ .early_fragment_tests_bit = true, .late_fragment_tests_bit = true };
-                    vk_barriers[i].dst_access_mask = .{ .depth_stencil_attachment_write_bit = true };
-                },
-                .present => {
-                    vk_barriers[i].src_stage_mask = .{ .color_attachment_output_bit = true };
-                    vk_barriers[i].src_access_mask = .{ .color_attachment_write_bit = true };
-                    vk_barriers[i].dst_stage_mask = .{ .bottom_of_pipe_bit = true };
-                },
-                else => {},
-            }
-        }
-        var dep = rhi.vulkan.vk.DependencyInfo{
-            .image_memory_barrier_count = @intCast(options.image_barriers.len),
-            .p_image_memory_barriers = &vk_barriers,
-        };
-        dkb.cmdPipelineBarrier2(self.backend.vk.cmd, &dep);
-        return;
-    }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
-        // Metal render-pass load/store actions handle layout transitions.
-        return;
-    }
-    unreachable;
-}
-
-fn vk_image_layout(layout: Layout) rhi.vulkan.vk.ImageLayout {
-    return switch (layout) {
-        .undefined => .undefined,
-        .color_attachment => .color_attachment_optimal,
-        .depth_stencil_attachment => .depth_attachment_optimal,
-        .present => .present_src_khr,
-        else => .general,
-    };
-}
-
 pub const DepthAttachment = struct {
     view: rhi.Image.ImageView,
     load_op: LoadOp = .clear,
@@ -554,17 +342,17 @@ pub const DepthAttachment = struct {
     clear_depth: f32 = 1.0,
 };
 
-pub fn begin_rendering(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+pub fn begin_rendering(self: *Cmd, device: *rhi.Device, options: struct {
     color_attachments: []const ColorAttachment,
     render_area: Rect,
     depth_attachment: ?DepthAttachment = null,
 }) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var vk_attachments: [8]rhi.vulkan.vk.RenderingAttachmentInfo = undefined;
         for (options.color_attachments, 0..) |att, i| {
             vk_attachments[i] = .{
-                .image_view = att.view.vk,
+                .image_view = att.view.backend.vk,
                 .image_layout = .color_attachment_optimal,
                 .resolve_mode = .{},
                 .resolve_image_layout = .undefined,
@@ -593,7 +381,7 @@ pub fn begin_rendering(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device,
         var depth_att: rhi.vulkan.vk.RenderingAttachmentInfo = undefined;
         if (options.depth_attachment) |da| {
             depth_att = .{
-                .image_view = da.view.vk,
+                .image_view = da.view.backend.vk,
                 .image_layout = .depth_attachment_optimal,
                 .resolve_mode = .{},
                 .resolve_image_layout = .undefined,
@@ -613,7 +401,7 @@ pub fn begin_rendering(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device,
         dkb.cmdBeginRendering(self.backend.vk.cmd, &info);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         const desc = rhi.metal.mtl.RenderPassDescriptor.renderPassDescriptor();
         for (options.color_attachments, 0..) |att, i| {
             const ca = desc.colorAttachments().object(@intCast(i));
@@ -649,13 +437,13 @@ pub fn begin_rendering(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device,
     unreachable;
 }
 
-pub fn end_rendering(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn end_rendering(self: *Cmd, device: *rhi.Device) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.cmdEndRendering(self.backend.vk.cmd);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.endEncoding();
         self.backend.mtl.encoder = null;
         return;
@@ -663,41 +451,41 @@ pub fn end_rendering(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device) v
     unreachable;
 }
 
-pub fn set_viewport(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, vp: Viewport) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn set_viewport(self: *Cmd, device: *rhi.Device, vp: Viewport) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var v = [_]rhi.vulkan.vk.Viewport{.{ .x = vp.x, .y = vp.y, .width = vp.width, .height = vp.height, .min_depth = vp.min_depth, .max_depth = vp.max_depth }};
         dkb.cmdSetViewport(self.backend.vk.cmd, 0, &v);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.setViewport(.{ .origin_x = vp.x, .origin_y = vp.y, .width = vp.width, .height = vp.height, .znear = vp.min_depth, .zfar = vp.max_depth });
         return;
     }
     unreachable;
 }
 
-pub fn set_scissor(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, rect: Rect) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn set_scissor(self: *Cmd, device: *rhi.Device, rect: Rect) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var s = [_]rhi.vulkan.vk.Rect2D{.{ .offset = .{ .x = rect.x, .y = rect.y }, .extent = .{ .width = rect.width, .height = rect.height } }};
         dkb.cmdSetScissor(self.backend.vk.cmd, 0, &s);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.setScissorRect(.{ .x = @intCast(rect.x), .y = @intCast(rect.y), .width = rect.width, .height = rect.height });
         return;
     }
     unreachable;
 }
 
-pub fn bind_pipeline(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, pipeline: *rhi.Pipeline) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn bind_pipeline(self: *Cmd, device: *rhi.Device, pipeline: *rhi.Pipeline) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.cmdBindPipeline(self.backend.vk.cmd, .graphics, pipeline.backend.vk.pipeline);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.setRenderPipelineState(pipeline.backend.mtl.state);
         if (pipeline.backend.mtl.depth_stencil_state) |dss| {
             self.backend.mtl.encoder.?.setDepthStencilState(dss);
@@ -707,28 +495,28 @@ pub fn bind_pipeline(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, p
     unreachable;
 }
 
-pub fn draw(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+pub fn draw(self: *Cmd, device: *rhi.Device, options: struct {
     vertex_count: u32,
     instance_count: u32 = 1,
     first_vertex: u32 = 0,
     first_instance: u32 = 0,
 }) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.cmdDraw(self.backend.vk.cmd, options.vertex_count, options.instance_count, options.first_vertex, options.first_instance);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.drawPrimitives(.triangle, options.first_vertex, options.vertex_count);
         return;
     }
     unreachable;
 }
 
-pub fn clear_attachment_regions(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+pub fn clear_attachment_regions(self: *Cmd, device: *rhi.Device, options: struct {
     regions: []const struct { color: [4]f32, rect: Rect },
 }) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         for (options.regions) |r| {
             var clear_rect = [_]rhi.vulkan.vk.ClearRect{.{
@@ -745,7 +533,7 @@ pub fn clear_attachment_regions(self: *Cmd, renderer: *rhi.Renderer, device: *rh
         }
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         // Metal cannot clear sub-rects inside a pass; the begin_rendering load
         // action already cleared the whole attachment. Per-quadrant fills would
         // need solid-color draws (a follow-up).
@@ -756,23 +544,23 @@ pub fn clear_attachment_regions(self: *Cmd, renderer: *rhi.Renderer, device: *rh
 
 pub const IndexType = enum { uint16, uint32 };
 
-pub fn bind_vertex_buffer(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, buffer: *rhi.Buffer, slot: u32) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn bind_vertex_buffer(self: *Cmd, device: *rhi.Device, buffer: *rhi.Buffer, slot: u32) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const buffers = [_]rhi.vulkan.vk.Buffer{buffer.backend.vk.buffer};
         const offsets = [_]rhi.vulkan.vk.DeviceSize{0};
         dkb.cmdBindVertexBuffers(self.backend.vk.cmd, slot, &buffers, &offsets);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.setVertexBuffer(buffer.backend.mtl.buffer, 0, rhi.pipeline.mtl_vertex_buffer_base + slot);
         return;
     }
     unreachable;
 }
 
-pub fn bind_index_buffer(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, buffer: *rhi.Buffer, index_type: IndexType) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn bind_index_buffer(self: *Cmd, device: *rhi.Device, buffer: *rhi.Buffer, index_type: IndexType) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.cmdBindIndexBuffer(self.backend.vk.cmd, buffer.backend.vk.buffer, 0, switch (index_type) {
             .uint16 => .uint16,
@@ -780,7 +568,7 @@ pub fn bind_index_buffer(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Devic
         });
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.index_buffer = buffer.backend.mtl.buffer;
         self.backend.mtl.index_type = switch (index_type) {
             .uint16 => .uint16,
@@ -791,18 +579,18 @@ pub fn bind_index_buffer(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Devic
     unreachable;
 }
 
-pub fn draw_indexed(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+pub fn draw_indexed(self: *Cmd, device: *rhi.Device, options: struct {
     index_count: u32,
     instance_count: u32 = 1,
     first_index: u32 = 0,
     vertex_offset: i32 = 0,
 }) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.cmdDrawIndexed(self.backend.vk.cmd, options.index_count, options.instance_count, options.first_index, options.vertex_offset, 0);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         const index_size: u32 = switch (self.backend.mtl.index_type) {
             .uint16 => 2,
             .uint32 => 4,
@@ -820,13 +608,13 @@ pub fn draw_indexed(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, op
 }
 
 /// Set vertex-stage push constants (Vulkan) / inline vertex bytes (Metal).
-pub fn set_push_constants(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Device, pipeline: *rhi.Pipeline, bytes: []const u8) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn set_push_constants(self: *Cmd, device: *rhi.Device, pipeline: *rhi.Pipeline, bytes: []const u8) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.cmdPushConstants(self.backend.vk.cmd, pipeline.backend.vk.layout, .{ .vertex_bit = true }, 0, @intCast(bytes.len), bytes.ptr);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         // slangc places the vertex push-constant block at buffer index 0.
         self.backend.mtl.encoder.?.setVertexBytes(bytes.ptr, bytes.len, 0);
         return;
@@ -834,15 +622,494 @@ pub fn set_push_constants(self: *Cmd, renderer: *rhi.Renderer, device: *rhi.Devi
     unreachable;
 }
 
-//pub fn resourceBarrier(self: *Cmd, allocator: std.mem.Allocator, renderer: *rhi.Renderer, options: struct {
-//    image_barrier: []const rhi.Image.Barrier,
-//}) void {
-//    if (rhi.is_target_selected(.vk, renderer)) {
-//        var vk_image_barriers = try allocator.alloc(volk.c.VkImageMemoryBarrier, options.image_barrier.len);
-//        defer allocator.free(vk_image_barriers);
-//        for (options.image_barrier, 0..) |barrier, i| {
-//            @memcpy(&vk_image_barriers[i], &barrier);
-//        }
-//        volk.c.vkCmdPipelineBarrier.?(self.backend.vk.cmd, volk.c.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, volk.c.VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, null, 0, null, vk_image_barriers.len, vk_image_barriers.ptr);
-//    } else if (rhi.is_target_selected(.dx12, renderer)) {} else if (rhi.is_target_selected(.mtl, renderer)) {}
-//}
+// ---------------------------------------------------------------------------
+// Additional leaf commands ported from HPL2 RITypes.h `RICmd`. The compute and
+// transfer commands below have no Metal implementation yet: the Metal backend
+// currently opens only a render encoder (see begin_rendering), with no compute
+// or blit encoder lifecycle. They are Vulkan-complete and panic on Metal until
+// that encoder plumbing lands; no Metal example exercises them.
+// ---------------------------------------------------------------------------
+
+/// Dispatch a compute grid.
+pub fn dispatch(self: *Cmd, device: *rhi.Device, options: struct {
+    group_count_x: u32 = 1,
+    group_count_y: u32 = 1,
+    group_count_z: u32 = 1,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdDispatch(self.backend.vk.cmd, options.group_count_x, options.group_count_y, options.group_count_z);
+        return;
+    }
+    @panic("dispatch: not yet implemented on the Metal backend");
+}
+
+/// Dispatch a compute grid whose group counts are read from `buffer` at `offset`
+/// (a `VkDispatchIndirectCommand`).
+pub fn dispatch_indirect(self: *Cmd, device: *rhi.Device, buffer: *rhi.Buffer, offset: u64) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdDispatchIndirect(self.backend.vk.cmd, buffer.backend.vk.buffer, offset);
+        return;
+    }
+    @panic("dispatch_indirect: not yet implemented on the Metal backend");
+}
+
+/// Issue `draw_count` indirect draws from `buffer` (`VkDrawIndirectCommand`s,
+/// `stride` bytes apart).
+pub fn draw_indirect(self: *Cmd, device: *rhi.Device, options: struct {
+    buffer: *rhi.Buffer,
+    offset: u64 = 0,
+    draw_count: u32 = 1,
+    stride: u32 = 0,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdDrawIndirect(self.backend.vk.cmd, options.buffer.backend.vk.buffer, options.offset, options.draw_count, options.stride);
+        return;
+    }
+    @panic("draw_indirect: not yet implemented on the Metal backend");
+}
+
+/// Issue `draw_count` indexed indirect draws from `buffer`
+/// (`VkDrawIndexedIndirectCommand`s, `stride` bytes apart).
+pub fn draw_indexed_indirect(self: *Cmd, device: *rhi.Device, options: struct {
+    buffer: *rhi.Buffer,
+    offset: u64 = 0,
+    draw_count: u32 = 1,
+    stride: u32 = 0,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        dkb.cmdDrawIndexedIndirect(self.backend.vk.cmd, options.buffer.backend.vk.buffer, options.offset, options.draw_count, options.stride);
+        return;
+    }
+    @panic("draw_indexed_indirect: not yet implemented on the Metal backend");
+}
+
+/// Buffer-to-buffer copy of `size` bytes. Caller owns the surrounding barriers.
+pub fn copy_buffer(self: *Cmd, device: *rhi.Device, options: struct {
+    src: *rhi.Buffer,
+    src_offset: u64 = 0,
+    dst: *rhi.Buffer,
+    dst_offset: u64 = 0,
+    size: u64,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        const regions = [_]rhi.vulkan.vk.BufferCopy{.{
+            .src_offset = options.src_offset,
+            .dst_offset = options.dst_offset,
+            .size = options.size,
+        }};
+        dkb.cmdCopyBuffer(self.backend.vk.cmd, options.src.backend.vk.buffer, options.dst.backend.vk.buffer, regions[0..]);
+        return;
+    }
+    @panic("copy_buffer: not yet implemented on the Metal backend");
+}
+
+/// Copy one buffer region into a single texture subresource. `dst` must already
+/// be in the `copy_dst` (TRANSFER_DST_OPTIMAL) state. `buffer_row_length` and
+/// `buffer_image_height` are in texels (0 = tightly packed).
+pub fn copy_buffer_to_texture(self: *Cmd, device: *rhi.Device, options: struct {
+    src: *rhi.Buffer,
+    dst: *rhi.Image,
+    buffer_offset: u64 = 0,
+    buffer_row_length: u32 = 0,
+    buffer_image_height: u32 = 0,
+    mip_level: u32 = 0,
+    base_array_layer: u32 = 0,
+    layer_count: u32 = 1,
+    aspect: BarrierAspect = .color,
+    x: i32 = 0,
+    y: i32 = 0,
+    z: i32 = 0,
+    width: u32,
+    height: u32,
+    depth: u32 = 1,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        const regions = [_]rhi.vulkan.vk.BufferImageCopy{.{
+            .buffer_offset = options.buffer_offset,
+            .buffer_row_length = options.buffer_row_length,
+            .buffer_image_height = options.buffer_image_height,
+            .image_subresource = .{
+                .aspect_mask = vk_barrier_aspect(options.aspect),
+                .mip_level = options.mip_level,
+                .base_array_layer = options.base_array_layer,
+                .layer_count = options.layer_count,
+            },
+            .image_offset = .{ .x = options.x, .y = options.y, .z = options.z },
+            .image_extent = .{ .width = options.width, .height = options.height, .depth = options.depth },
+        }};
+        dkb.cmdCopyBufferToImage(self.backend.vk.cmd, options.src.backend.vk.buffer, options.dst.backend.vk.image, .transfer_dst_optimal, regions[0..]);
+        return;
+    }
+    @panic("copy_buffer_to_texture: not yet implemented on the Metal backend");
+}
+
+/// Copy a single 1:1 region between textures (no scaling). `src`/`dst` must be in
+/// the `copy_src`/`copy_dst` states. Caller owns the surrounding barriers.
+pub fn copy_image(self: *Cmd, device: *rhi.Device, options: struct {
+    src: *rhi.Image,
+    dst: *rhi.Image,
+    aspect: BarrierAspect = .color,
+    src_mip: u32 = 0,
+    src_base_layer: u32 = 0,
+    src_x: i32 = 0,
+    src_y: i32 = 0,
+    src_z: i32 = 0,
+    dst_mip: u32 = 0,
+    dst_base_layer: u32 = 0,
+    dst_x: i32 = 0,
+    dst_y: i32 = 0,
+    dst_z: i32 = 0,
+    layer_count: u32 = 1,
+    width: u32,
+    height: u32,
+    depth: u32 = 1,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        const aspect_mask = vk_barrier_aspect(options.aspect);
+        const regions = [_]rhi.vulkan.vk.ImageCopy{.{
+            .src_subresource = .{
+                .aspect_mask = aspect_mask,
+                .mip_level = options.src_mip,
+                .base_array_layer = options.src_base_layer,
+                .layer_count = options.layer_count,
+            },
+            .src_offset = .{ .x = options.src_x, .y = options.src_y, .z = options.src_z },
+            .dst_subresource = .{
+                .aspect_mask = aspect_mask,
+                .mip_level = options.dst_mip,
+                .base_array_layer = options.dst_base_layer,
+                .layer_count = options.layer_count,
+            },
+            .dst_offset = .{ .x = options.dst_x, .y = options.dst_y, .z = options.dst_z },
+            .extent = .{ .width = options.width, .height = options.height, .depth = options.depth },
+        }};
+        dkb.cmdCopyImage(self.backend.vk.cmd, options.src.backend.vk.image, .transfer_src_optimal, options.dst.backend.vk.image, .transfer_dst_optimal, regions[0..]);
+        return;
+    }
+    @panic("copy_image: not yet implemented on the Metal backend");
+}
+
+/// Clear a storage image (mip 0, layer 0) that is in the GENERAL layout — pair
+/// with the `clear_storage` resource state on the surrounding barriers.
+pub fn clear_storage_image(self: *Cmd, device: *rhi.Device, image: *rhi.Image, color: [4]f32) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        const clear_color = rhi.vulkan.vk.ClearColorValue{ .float_32 = color };
+        const ranges = [_]rhi.vulkan.vk.ImageSubresourceRange{.{
+            .aspect_mask = .{ .color_bit = true },
+            .base_mip_level = 0,
+            .level_count = 1,
+            .base_array_layer = 0,
+            .layer_count = 1,
+        }};
+        dkb.cmdClearColorImage(self.backend.vk.cmd, image.backend.vk.image, .general, &clear_color, ranges[0..]);
+        return;
+    }
+    @panic("clear_storage_image: not yet implemented on the Metal backend");
+}
+
+// Combined access+layout resource state (Forge-style). Each field encodes one
+// (access, layout) contribution and fields may be combined (e.g.
+// `.{ .storage_write = true, .copy_dst = true }` for a producer that both
+// stored and copied; `.{ .storage_read = true, .shader_resource = true }` for a
+// sampled view of a storage image, which forces the GENERAL layout). The
+// pipeline stages are derived conservatively from the set fields unless narrowed
+// by a BarrierStages hint. The all-false value (`.{}`) is the UNDEFINED state.
+// Ported from HPL2 RIBarrier.h RIResourceState_e.
+pub const ResourceState = struct {
+    general: bool = false, // GENERAL layout, broad read/write
+    render_target: bool = false, // COLOR_ATTACHMENT_OPTIMAL, write
+    render_target_read: bool = false, // COLOR_ATTACHMENT_OPTIMAL, read|write (blend)
+    depth_write: bool = false, // DEPTH_ATTACHMENT_OPTIMAL
+    depth_read: bool = false, // DEPTH_READ_ONLY_OPTIMAL
+    shader_resource: bool = false, // SHADER_READ_ONLY_OPTIMAL, sampled
+    storage_read: bool = false, // GENERAL, storage read
+    storage_write: bool = false, // GENERAL, storage write
+    copy_src: bool = false, // TRANSFER_SRC_OPTIMAL
+    copy_dst: bool = false, // TRANSFER_DST_OPTIMAL
+    present: bool = false, // PRESENT_SRC_KHR
+    indirect_argument: bool = false, // buffer only
+    vertex_buffer: bool = false, // buffer only
+    index_buffer: bool = false, // buffer only
+    constant_buffer: bool = false, // buffer only
+    accel_read: bool = false, // acceleration structure read
+    accel_write: bool = false, // acceleration structure build write
+    clear_storage: bool = false, // GENERAL, vkCmdClear* transfer write
+
+    // Named composite mirroring RIResourceState_e's OR'd value (the UNDEFINED
+    // state is just the all-false default, `.{}`).
+    pub const unordered_access: ResourceState = .{ .storage_read = true, .storage_write = true };
+};
+
+// Optional per-side stage narrowing; all-false derives a conservative mask
+// from the resource state (e.g. shader_resource -> all shader stages).
+pub const BarrierStages = struct {
+    vertex: bool = false,
+    fragment: bool = false,
+    compute: bool = false,
+    ray_tracing: bool = false,
+    draw_indirect: bool = false,
+    copy: bool = false,
+    blit: bool = false,
+    clear: bool = false,
+    accel_build: bool = false,
+
+    pub const all_graphics: BarrierStages = .{ .vertex = true, .fragment = true };
+    pub const all_shader: BarrierStages = .{ .vertex = true, .fragment = true, .compute = true, .ray_tracing = true };
+};
+
+pub const BarrierAspect = enum(u8) { color, depth, stencil, depth_stencil };
+
+pub const ImageBarrier = struct {
+    image: *const rhi.Image,
+    before: ResourceState,
+    after: ResourceState,
+    before_stages: BarrierStages = .{}, // all-false => derive from 'before'
+    after_stages: BarrierStages = .{}, // all-false => derive from 'after'
+    aspect: BarrierAspect = .color,
+    base_mip: u16 = 0,
+    mip_count: u16 = 0, // 0 => REMAINING_MIP_LEVELS
+    base_layer: u16 = 0,
+    layer_count: u16 = 0, // 0 => REMAINING_ARRAY_LAYERS
+};
+
+pub const BufferBarrier = struct {
+    buffer: *const rhi.Buffer,
+    before: ResourceState,
+    after: ResourceState,
+    before_stages: BarrierStages = .{}, // all-false => derive from 'before'
+    after_stages: BarrierStages = .{}, // all-false => derive from 'after'
+    offset: u64 = 0,
+    size: u64 = 0, // 0 => WHOLE_SIZE
+};
+
+// Global execution+memory barrier (no resource handle).
+pub const MemoryBarrier = struct {
+    before: ResourceState,
+    after: ResourceState,
+    before_stages: BarrierStages = .{}, // all-false => derive from 'before'
+    after_stages: BarrierStages = .{}, // all-false => derive from 'after'
+};
+
+fn vk_resource_state_layout(state: ResourceState) rhi.vulkan.vk.ImageLayout {
+    // GENERAL wins over the optimal layouts: a state that mixes storage access
+    // with anything else (e.g. a sampled view of a storage image) can only be
+    // satisfied by the GENERAL layout.
+    if (state.general or state.storage_read or state.storage_write or state.clear_storage)
+        return .general;
+    if (state.render_target or state.render_target_read)
+        return .color_attachment_optimal;
+    if (state.depth_write)
+        return .depth_attachment_optimal;
+    if (state.depth_read)
+        return .depth_read_only_optimal;
+    if (state.shader_resource)
+        return .shader_read_only_optimal;
+    if (state.copy_src)
+        return .transfer_src_optimal;
+    if (state.copy_dst)
+        return .transfer_dst_optimal;
+    if (state.present)
+        return .present_src_khr;
+    // UNDEFINED, or buffer-only / accel states that carry no image layout.
+    return .undefined;
+}
+
+fn vk_resource_state_access(state: ResourceState) rhi.vulkan.vk.AccessFlags2 {
+    var access: rhi.vulkan.vk.AccessFlags2 = .{};
+    if (state.general) {
+        access.shader_read_bit = true;
+        access.shader_write_bit = true;
+    }
+    if (state.render_target) access.color_attachment_write_bit = true;
+    if (state.render_target_read) {
+        access.color_attachment_read_bit = true;
+        access.color_attachment_write_bit = true;
+    }
+    if (state.depth_write) {
+        access.depth_stencil_attachment_read_bit = true;
+        access.depth_stencil_attachment_write_bit = true;
+    }
+    if (state.depth_read) access.depth_stencil_attachment_read_bit = true;
+    if (state.shader_resource) {
+        access.shader_sampled_read_bit = true;
+        access.shader_read_bit = true;
+    }
+    if (state.storage_read) access.shader_storage_read_bit = true;
+    if (state.storage_write) access.shader_storage_write_bit = true;
+    if (state.copy_src) access.transfer_read_bit = true;
+    if (state.copy_dst) access.transfer_write_bit = true;
+    if (state.indirect_argument) access.indirect_command_read_bit = true;
+    if (state.vertex_buffer) access.vertex_attribute_read_bit = true;
+    if (state.index_buffer) access.index_read_bit = true;
+    if (state.constant_buffer) access.uniform_read_bit = true;
+    if (state.accel_read) access.acceleration_structure_read_bit_khr = true;
+    if (state.accel_write) access.acceleration_structure_write_bit_khr = true;
+    if (state.clear_storage) access.transfer_write_bit = true;
+    return access;
+}
+
+// Conservative stage derivation for barriers that omit a stage hint.
+fn vk_resource_state_stages(state: ResourceState) rhi.vulkan.vk.PipelineStageFlags2 {
+    var flags: rhi.vulkan.vk.PipelineStageFlags2 = .{};
+    if (state.general or state.shader_resource or state.storage_read or
+        state.storage_write or state.constant_buffer)
+    {
+        flags.vertex_shader_bit = true;
+        flags.fragment_shader_bit = true;
+        flags.compute_shader_bit = true;
+        flags.ray_tracing_shader_bit_khr = true;
+    }
+    if (state.render_target or state.render_target_read) flags.color_attachment_output_bit = true;
+    if (state.depth_write or state.depth_read) {
+        flags.early_fragment_tests_bit = true;
+        flags.late_fragment_tests_bit = true;
+    }
+    if (state.copy_src or state.copy_dst) {
+        flags.copy_bit = true;
+        flags.blit_bit = true;
+        flags.clear_bit = true;
+    }
+    if (state.indirect_argument) flags.draw_indirect_bit = true;
+    if (state.vertex_buffer or state.index_buffer) flags.vertex_input_bit = true;
+    if (state.accel_read or state.accel_write) flags.acceleration_structure_build_bit_khr = true;
+    if (state.clear_storage) flags.clear_bit = true;
+    // UNDEFINED / PRESENT contribute no stages.
+    return flags;
+}
+
+fn vk_barrier_stages(hint: BarrierStages, state_fallback: ResourceState) rhi.vulkan.vk.PipelineStageFlags2 {
+    if (std.meta.eql(hint, BarrierStages{}))
+        return vk_resource_state_stages(state_fallback);
+    return .{
+        .vertex_shader_bit = hint.vertex,
+        .fragment_shader_bit = hint.fragment,
+        .compute_shader_bit = hint.compute,
+        .ray_tracing_shader_bit_khr = hint.ray_tracing,
+        .draw_indirect_bit = hint.draw_indirect,
+        .copy_bit = hint.copy,
+        .blit_bit = hint.blit,
+        .clear_bit = hint.clear,
+        .acceleration_structure_build_bit_khr = hint.accel_build,
+    };
+}
+
+fn vk_barrier_aspect(aspect: BarrierAspect) rhi.vulkan.vk.ImageAspectFlags {
+    return switch (aspect) {
+        .color => .{ .color_bit = true },
+        .depth => .{ .depth_bit = true },
+        .stencil => .{ .stencil_bit = true },
+        .depth_stencil => .{ .depth_bit = true, .stencil_bit = true },
+    };
+}
+
+// Emit pipeline barriers from resource-state transitions. All groups are
+// batched into a single backend barrier command (vkCmdPipelineBarrier2); any
+// group may be empty. The comptime capacities size the backend scratch arrays
+// on the stack; each barrier slice must fit its capacity.
+pub fn resource_barrier(
+    self: *Cmd,
+    device: *rhi.Device,
+    comptime capacity: struct {
+        memory: usize = 2,
+        buffer: usize = 8,
+        image: usize = 8,
+    },
+    options: struct {
+        memory_barriers: []const MemoryBarrier = &.{},
+        buffer_barriers: []const BufferBarrier = &.{},
+        image_barriers: []const ImageBarrier = &.{},
+    },
+) void {
+    std.debug.assert(options.memory_barriers.len <= capacity.memory);
+    std.debug.assert(options.buffer_barriers.len <= capacity.buffer);
+    std.debug.assert(options.image_barriers.len <= capacity.image);
+    if (options.memory_barriers.len + options.buffer_barriers.len + options.image_barriers.len == 0)
+        return;
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        var vk_memory: [capacity.memory]rhi.vulkan.vk.MemoryBarrier2 = undefined;
+        var vk_buffer: [capacity.buffer]rhi.vulkan.vk.BufferMemoryBarrier2 = undefined;
+        var vk_image: [capacity.image]rhi.vulkan.vk.ImageMemoryBarrier2 = undefined;
+
+        if (comptime capacity.memory != 0) for (options.memory_barriers, 0..) |*barrier, i| {
+            vk_memory[i] = .{
+                .src_stage_mask = vk_barrier_stages(barrier.before_stages, barrier.before),
+                .src_access_mask = vk_resource_state_access(barrier.before),
+                .dst_stage_mask = vk_barrier_stages(barrier.after_stages, barrier.after),
+                .dst_access_mask = vk_resource_state_access(barrier.after),
+            };
+        };
+
+        if (comptime capacity.buffer != 0) for (options.buffer_barriers, 0..) |*barrier, i| {
+            vk_buffer[i] = .{
+                .src_stage_mask = vk_barrier_stages(barrier.before_stages, barrier.before),
+                .src_access_mask = vk_resource_state_access(barrier.before),
+                .dst_stage_mask = vk_barrier_stages(barrier.after_stages, barrier.after),
+                .dst_access_mask = vk_resource_state_access(barrier.after),
+                .src_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
+                .dst_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
+                .buffer = barrier.buffer.backend.vk.buffer,
+                .offset = barrier.offset,
+                .size = if (barrier.size != 0) barrier.size else rhi.vulkan.vk.WHOLE_SIZE,
+            };
+        };
+
+        if (comptime capacity.image != 0) for (options.image_barriers, 0..) |*barrier, i| {
+            vk_image[i] = .{
+                .src_stage_mask = vk_barrier_stages(barrier.before_stages, barrier.before),
+                .src_access_mask = vk_resource_state_access(barrier.before),
+                .dst_stage_mask = vk_barrier_stages(barrier.after_stages, barrier.after),
+                .dst_access_mask = vk_resource_state_access(barrier.after),
+                .old_layout = vk_resource_state_layout(barrier.before),
+                .new_layout = vk_resource_state_layout(barrier.after),
+                .src_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
+                .dst_queue_family_index = rhi.vulkan.vk.QUEUE_FAMILY_IGNORED,
+                .image = barrier.image.backend.vk.image,
+                .subresource_range = .{
+                    .aspect_mask = vk_barrier_aspect(barrier.aspect),
+                    .base_mip_level = barrier.base_mip,
+                    .level_count = if (barrier.mip_count != 0) barrier.mip_count else rhi.vulkan.vk.REMAINING_MIP_LEVELS,
+                    .base_array_layer = barrier.base_layer,
+                    .layer_count = if (barrier.layer_count != 0) barrier.layer_count else rhi.vulkan.vk.REMAINING_ARRAY_LAYERS,
+                },
+            };
+        };
+
+        var dependency_info = rhi.vulkan.vk.DependencyInfo{
+            .memory_barrier_count = @intCast(options.memory_barriers.len),
+            .p_memory_barriers = if (options.memory_barriers.len != 0) vk_memory[0..].ptr else null,
+            .buffer_memory_barrier_count = @intCast(options.buffer_barriers.len),
+            .p_buffer_memory_barriers = if (options.buffer_barriers.len != 0) vk_buffer[0..].ptr else null,
+            .image_memory_barrier_count = @intCast(options.image_barriers.len),
+            .p_image_memory_barriers = if (options.image_barriers.len != 0) vk_image[0..].ptr else null,
+        };
+        dkb.cmdPipelineBarrier2(self.backend.vk.cmd, &dependency_info);
+        return;
+    }
+    unreachable;
+}
+
+// Single-barrier conveniences.
+pub fn memory_barrier(self: *Cmd, device: *rhi.Device, barrier: MemoryBarrier) void {
+    self.resource_barrier(device,.{ .memory = 1, .buffer = 0, .image = 0 }, .{ .memory_barriers = &[_]MemoryBarrier{barrier} });
+}
+
+pub fn buffer_barrier(self: *Cmd, device: *rhi.Device, barrier: BufferBarrier) void {
+    self.resource_barrier(device,.{ .memory = 0, .buffer = 1, .image = 0 }, .{ .buffer_barriers = &[_]BufferBarrier{barrier} });
+}
+
+pub fn image_barrier(self: *Cmd, device: *rhi.Device, barrier: ImageBarrier) void {
+    self.resource_barrier(device,.{ .memory = 0, .buffer = 0, .image = 1 }, .{ .image_barriers = &[_]ImageBarrier{barrier} });
+}
+
+test {
+    std.testing.refAllDecls(Cmd);
+}

@@ -64,15 +64,15 @@ pub fn stages(self: *Shader) Stage {
     };
 }
 
-pub fn deinit(self: *Shader, renderer: *rhi.Renderer, device: *rhi.Device) void {
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+pub fn deinit(self: *Shader, device: *rhi.Device) void {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         if (self.backend.mtl.vertex_function) |f| f.release();
         if (self.backend.mtl.vertex_library) |l| l.release();
         if (self.backend.mtl.fragment_function) |f| f.release();
         if (self.backend.mtl.fragment_library) |l| l.release();
         return;
     }
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const vk = self.backend.vk;
         if (vk.vertex_module != .null_handle) dkb.destroyShaderModule(device.backend.vk.device, vk.vertex_module, null);
@@ -86,7 +86,7 @@ const shader_stage_desc = struct {
     entry_point: []const u8,
 };
 
-pub fn init_graphics_shader(device: *rhi.Device, renderer: *rhi.Renderer, options: struct {
+pub fn init_graphics_shader(device: *rhi.Device, options: struct {
     vertex_stage: ?shader_stage_desc = null,
     fragment_stage: ?shader_stage_desc = null,
     geometry_stage: ?shader_stage_desc = null,
@@ -94,34 +94,28 @@ pub fn init_graphics_shader(device: *rhi.Device, renderer: *rhi.Renderer, option
     domain_stage: ?shader_stage_desc = null,
     comp_stage: ?shader_stage_desc = null,
 }) !Shader {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         return .{ .backend = .{ .vk = .{
             .vertex_module = if (options.vertex_stage) |stage| res: {
                 std.debug.assert(stage.data.len % @sizeOf(u32) == 0);
                 var module_create_info: vulkan.vk.ShaderModuleCreateInfo = .{
-                    .sType = vulkan.vk.STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-                    .p_next = null,
-                    .flags = 0,
-                    .code_size = stage.data.len / @sizeOf(u32),
-                    .p_code = @ptrCast(stage.data.ptr),
+                    .code_size = stage.data.len,
+                    .p_code = @ptrCast(@alignCast(stage.data.ptr)),
                 };
                 break :res try dkb.createShaderModule(device.backend.vk.device, &module_create_info, null);
             } else .null_handle,
             .pixel_module = if (options.fragment_stage) |stage| res: {
                 std.debug.assert(stage.data.len % @sizeOf(u32) == 0);
                 var module_create_info: vulkan.vk.ShaderModuleCreateInfo = .{
-                    .sType = vulkan.vk.STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-                    .p_next = null,
-                    .flags = 0,
-                    .code_size = stage.data.len / @sizeOf(u32),
-                    .p_code = @ptrCast(stage.data.ptr),
+                    .code_size = stage.data.len,
+                    .p_code = @ptrCast(@alignCast(stage.data.ptr)),
                 };
                 break :res try dkb.createShaderModule(device.backend.vk.device, &module_create_info, null);
             } else .null_handle,
         } } };
     }
-    if (rhi.is_target_selected(.mtl, renderer)) {
+    if (rhi.is_target_selected(.mtl)) {
         const dev = device.backend.mtl.device;
         var result: Shader = .{ .backend = .{ .mtl = .{} } };
         if (options.vertex_stage) |stage| {

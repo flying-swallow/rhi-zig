@@ -36,14 +36,14 @@ pub fn DescriptorPool(comptime config: DescriptorPoolConfig) type {
         const Self = @This();
 
         allocator: std.mem.Allocator,
-        alloc_descriptors: fn (pool: *Self, renderer: *rhi.Renderer, device: *rhi.Device) DescriptorSetSlot,
+        alloc_descriptors: *const fn (pool: *Self, device: *rhi.Device) void,
         groups_inflight: u32, // number of concurrent frames that can be in-flight at once, used to determine how many descriptor sets to allocate in each pool
 
-        hash_slots: [config.num_hash_slots]?*DescriptorSetSlot = .{null} ** config.num_hash_slots,
+        hash_slots: [config.num_hash_slots]?*DescriptorSetSlot = @splat(null),
         queue_head: ?*DescriptorSetSlot = null,
         queue_tail: ?*DescriptorSetSlot = null,
 
-        reserved_slots: std.ArrayList(*DescriptorSetSlot) = null,
+        reserved_slots: std.ArrayList(*DescriptorSetSlot) = .empty,
 
         backend: union {
             vk: if (rhi.platform_has_api(.vk)) struct {
@@ -53,14 +53,31 @@ pub fn DescriptorPool(comptime config: DescriptorPoolConfig) type {
             mtl: rhi.wrapper_platform_type(.mtl, struct {}),
         },
 
-        pub fn init(render: *rhi.Renderer, groups_inflight: u32, allocator: std.mem.Allocator) !Self {
+        pub fn init(
+            groups_inflight: u32,
+            alloc_descriptors: *const fn (pool: *Self, device: *rhi.Device) void,
+            allocator: std.mem.Allocator,
+        ) !Self {
             return .{
                 .groups_inflight = groups_inflight,
+                .alloc_descriptors = alloc_descriptors,
                 .allocator = allocator,
-                .backend = if (rhi.is_target_selected(.vk, render)) .{ .vk = .{
+                .reserved_slots = .empty,
+                .backend = if (rhi.is_target_selected(.vk)) .{ .vk = .{
                     .allocated_pools = .empty,
-                } } else if (rhi.is_target_selected(.dx12, render)) .{ .dx12 = {} } else if (rhi.is_target_selected(.mtl, render)) .{ .mtl = {} } else void,
+                } } else if (rhi.is_target_selected(.dx12)) .{ .dx12 = {} } else if (rhi.is_target_selected(.mtl)) .{ .mtl = {} } else void,
             };
+        }
+
+        pub fn deinit(self: *Self, device: *rhi.Device) void {
+            if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+                var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+                for (self.backend.vk.allocated_pools.items) |pool| {
+                    dkb.destroyDescriptorPool(device.backend.vk.device, pool, null);
+                }
+                self.backend.vk.allocated_pools.deinit(self.allocator);
+            }
+            self.reserved_slots.deinit(self.allocator);
         }
 
         fn attach_descriptor_slot(self: *Self, slot: *DescriptorSetSlot) void {
@@ -129,33 +146,34 @@ pub fn DescriptorPool(comptime config: DescriptorPoolConfig) type {
         }
 
         /// Resolves a descriptor set for the given group index and hash. If a matching descriptor set is found in the pool, it is returned. Otherwise, a new descriptor set is allocated using the provided allocation function and returned.
-        pub fn resolve_descriptor_set(self: *Self, renderer: *rhi.Renderer, device: *rhi.Device, group_index: u32, hash: u32) DescriptorSetResult {
+        pub fn resolve_descriptor_set(self: *Self, device: *rhi.Device, group_index: u32, hash: u32) DescriptorSetResult {
             const hash_index: usize = hash % config.num_hash_slots;
             {
                 var slot: ?*DescriptorSetSlot = self.hash_slots[hash_index];
                 while (slot) |s| {
                     if (s.hash == hash) {
-                        if (self.queue_tail == s) {
-                            // already at the end of the queue
-                        } else if (self.queue_head == s) {
-                            self.queue_head = s.queue_next;
-                            if (s.queue_next) |n| {
-                                n.queue_prev = null;
+                        // move to MRU end of the LRU queue if not already there
+                        if (self.queue_tail != s) {
+                            if (self.queue_head == s) {
+                                self.queue_head = s.queue_next;
+                                if (s.queue_next) |n| {
+                                    n.queue_prev = null;
+                                }
+                            } else {
+                                if (s.queue_prev) |p| {
+                                    p.queue_next = s.queue_next;
+                                }
+                                if (s.queue_next) |n| {
+                                    n.queue_prev = s.queue_prev;
+                                }
                             }
-                        } else {
-                            if (s.queue_prev) |p| {
-                                p.queue_next = s.queue_next;
+                            s.queue_next = null;
+                            s.queue_prev = self.queue_tail;
+                            if (self.queue_tail) |qq| {
+                                qq.queue_next = s;
                             }
-                            if (s.queue_next) |n| {
-                                n.queue_prev = s.queue_prev;
-                            }
+                            self.queue_tail = s;
                         }
-                        s.queue_next = null;
-                        s.queue_prev = self.queue_tail;
-                        if (self.queue_tail) |qq| {
-                            qq.queue_next = s;
-                        }
-                        self.queue_tail = s;
                         s.group_index = group_index;
                         return .{ .found = true, .set = s };
                     }
@@ -174,14 +192,14 @@ pub fn DescriptorPool(comptime config: DescriptorPoolConfig) type {
             }
 
             if (self.reserved_slots.items.len == 0) {
-                self.alloc_descriptors(self, renderer, device);
+                self.alloc_descriptors(self, device);
                 std.debug.assert(self.reserved_slots.items.len > 0);
             }
             const slot = self.reserved_slots.pop() orelse unreachable;
             slot.hash = hash;
             slot.group_index = group_index;
             attach_descriptor_slot(self, slot);
-            .{ .found = false, .set = slot };
+            return .{ .found = false, .set = slot };
         }
     };
 }

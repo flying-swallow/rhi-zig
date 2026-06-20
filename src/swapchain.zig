@@ -41,7 +41,6 @@ pub const WindowHandle = if (builtin.os.tag == .windows) union(WindowType) {
 };
 
 allocator: std.mem.Allocator,
-present_queue: *rhi.Queue,
 width: u16,
 height: u16,
 backend: union {
@@ -104,27 +103,27 @@ fn vk_wapchain_create_info_khr_default(option: struct { surface: rhi.vulkan.vk.S
     };
 }
 
-pub fn image_view(self: *Swapchain, renderer: *rhi.Renderer, index: u32) rhi.Image.ImageView {
-    if (rhi.is_target_selected(.vk, renderer)) {
+pub fn image_view(self: *Swapchain, index: u32) rhi.Image.ImageView {
+    if (rhi.is_target_selected(.vk)) {
         return .{
-            .vk = self.backend.vk.views[index],
+            .backend = .{ .vk = self.backend.vk.views[index] },
         };
     }
-    if (rhi.is_target_selected(.mtl, renderer)) {
-        return .{ .mtl = self.backend.mtl.current_drawable.?.texture() };
+    if (rhi.is_target_selected(.mtl)) {
+        return .{ .backend = .{ .mtl = self.backend.mtl.current_drawable.?.texture() } };
     }
     unreachable;
 }
 
-pub fn image(self: *Swapchain, renderer: *rhi.Renderer, index: u32) rhi.Image {
-    if (rhi.is_target_selected(.vk, renderer)) {
+pub fn image(self: *Swapchain, index: u32) rhi.Image {
+    if (rhi.is_target_selected(.vk)) {
         return .{
             .backend = .{
                 .vk = .{ .image = self.backend.vk.images[index] },
             },
         };
     }
-    if (rhi.is_target_selected(.mtl, renderer)) {
+    if (rhi.is_target_selected(.mtl)) {
         return .{ .backend = .{ .mtl = .{ .texture = self.backend.mtl.current_drawable.?.texture() } } };
     }
     unreachable;
@@ -152,10 +151,10 @@ fn __priority_BT2020_G2084_10BIT(surface: *const rhi.vulkan.vk.SurfaceFormatKHR)
         (@as(u32, @intFromBool(surface.color_space == .hdr10_st2084_ext)) << 1);
 }
 
-pub fn deinit(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device) void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn deinit(self: *Swapchain, device: *rhi.Device) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
-        var ikb: *rhi.vulkan.vk.InstanceWrapper = &renderer.backend.vk.ikb;
+        var ikb: *rhi.vulkan.vk.InstanceWrapper = &rhi.renderer.instance.backend.vk.ikb;
         for (self.backend.vk.signal_semaphores) |sem| {
             dkb.destroySemaphore(device.backend.vk.device, sem, null);
         }
@@ -163,13 +162,13 @@ pub fn deinit(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device) vo
             dkb.destroyImageView(device.backend.vk.device, view, null);
         }
         dkb.destroySwapchainKHR(device.backend.vk.device, self.backend.vk.swapchain, null);
-        ikb.destroySurfaceKHR(renderer.backend.vk.instance, self.backend.vk.surface, null);
+        ikb.destroySurfaceKHR(rhi.renderer.instance.backend.vk.instance, self.backend.vk.surface, null);
         self.allocator.free(self.backend.vk.images);
         self.allocator.free(self.backend.vk.views);
         self.allocator.free(self.backend.vk.signal_semaphores);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         // The CAMetalLayer is owned by the window/SDL; nothing to free here.
         return;
     }
@@ -184,14 +183,15 @@ pub const NextImageResult = struct { image_index: u32, backend: union {
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 } };
 
-pub fn acquire_next_image(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device) !u32 {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn acquire_next_image(self: *Swapchain, device: *rhi.Device) !u32 {
+    std.debug.assert(self.backend.vk.images.len > 0);
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         self.backend.vk.signal_idx = (self.backend.vk.signal_idx + 1) % @as(u32, @intCast(self.backend.vk.signal_semaphores.len));
         const res = try dkb.acquireNextImageKHR(device.backend.vk.device, self.backend.vk.swapchain, std.math.maxInt(u64), self.backend.vk.signal_semaphores[self.backend.vk.signal_idx], .null_handle);
         return res.image_index;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         // Metal has no image-index concept — the layer vends the next drawable
         // synchronously. Hold it for rendering/present; index 0 is inert.
         self.backend.mtl.current_drawable = self.backend.mtl.layer.nextDrawable() orelse
@@ -201,8 +201,8 @@ pub fn acquire_next_image(self: *Swapchain, renderer: *rhi.Renderer, device: *rh
     unreachable;
 }
 
-pub fn present_vk(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, image_index: u32, wait_semaphores: []const rhi.vulkan.vk.Semaphore ) !void {
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+pub fn present_vk(self: *Swapchain, device: *rhi.Device, queue: *rhi.Queue, image_index: u32, wait_semaphores: []const rhi.vulkan.vk.Semaphore ) !void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var swapchains = [_]rhi.vulkan.vk.SwapchainKHR{self.backend.vk.swapchain};
         var image_indices = [_]u32{image_index};
@@ -214,7 +214,7 @@ pub fn present_vk(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device
             .wait_semaphore_count = @intCast(wait_semaphores.len),
             .p_wait_semaphores = wait_semaphores.ptr,
         };
-        _ = try dkb.queuePresentKHR(self.present_queue.backend.vk.queue, &present_info);
+        _ = try dkb.queuePresentKHR(queue.backend.vk.queue, &present_info);
         return;
     }
     unreachable;
@@ -223,13 +223,13 @@ pub fn present_vk(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device
 /// Backend-agnostic end-of-frame: end the command buffer, submit it (signalling
 /// the ring's sync primitive and waiting on the acquire semaphore), and present.
 /// Replaces the inline submit/present the examples used to do against raw Vulkan.
-pub fn frame_submit(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+pub fn frame_submit(self: *Swapchain, device: *rhi.Device, queue: *rhi.Queue, options: struct {
     image_index: u32,
     ring_element: *rhi.cmd.CommandRingElement,
     cmd: *rhi.Cmd,
 }) !void {
-    try options.cmd.end(renderer, device);
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    try options.cmd.end(device);
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const cmd_submit = [_]rhi.vulkan.vk.CommandBufferSubmitInfo{.{
             .command_buffer = options.cmd.backend.vk.cmd,
@@ -258,13 +258,13 @@ pub fn frame_submit(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Devi
         std.debug.assert(try dkb.getFenceStatus(device.backend.vk.device, options.ring_element.backend.vk.fence) == .success);
         var reset_fence = [_]rhi.vulkan.vk.Fence{options.ring_element.backend.vk.fence};
         _ = try dkb.resetFences(device.backend.vk.device, reset_fence[0..]);
-        _ = try dkb.queueSubmit2(self.present_queue.backend.vk.queue, submit_info[0..], options.ring_element.backend.vk.fence);
+        _ = try dkb.queueSubmit2(queue.backend.vk.queue, submit_info[0..], options.ring_element.backend.vk.fence);
 
         var wait_semaphores = [_]rhi.vulkan.vk.Semaphore{options.ring_element.backend.vk.semaphore};
-        try self.present_vk(renderer, device, options.image_index, &wait_semaphores);
+        try self.present_vk(device, queue, options.image_index, &wait_semaphores);
         return;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         const drawable = self.backend.mtl.current_drawable orelse return error.MetalNoDrawable;
         const cb = options.cmd.backend.mtl.cmd orelse return error.MetalNoCommandBuffer;
         cb.presentDrawable(drawable.id());
@@ -275,17 +275,17 @@ pub fn frame_submit(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Devi
     unreachable;
 }
 
-pub fn resize(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, width: u16, height: u16) !bool {
+pub fn resize(self: *Swapchain, device: *rhi.Device, width: u16, height: u16) !bool {
     if (width == self.width and height == self.height) {
         return false;
     }
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.layer.setDrawableSize(.{ .width = @floatFromInt(width), .height = @floatFromInt(height) });
         self.width = width;
         self.height = height;
         return true;
     }
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const old_swapchain = self.backend.vk.swapchain;
         var swapchain_create_info = vk_wapchain_create_info_khr_default(.{
@@ -353,11 +353,11 @@ pub fn resize(self: *Swapchain, renderer: *rhi.Renderer, device: *rhi.Device, wi
     unreachable;
 }
 
-pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.Device, width: u16, height: u16, queue: *rhi.Queue, handle: WindowHandle, option: struct {
+pub fn init(allocator: std.mem.Allocator, device: *rhi.Device, width: u16, height: u16, handle: WindowHandle, option: struct {
     format: SwapchainFormat = .bt709_g22_8bit,
-    image_count: u32 = 3,
+    request_image_count: u32 = 3,
 }) !Swapchain {
-    if ((comptime rhi.platform_has_api(.mtl)) and renderer.backend == .mtl) {
+    if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         const layer = rhi.metal.ca.MetalLayer.fromId(@ptrCast(@alignCast(handle.metal.layer))) orelse return error.MetalNoLayer;
         const pixel_format: rhi.metal.types.PixelFormat = switch (option.format) {
             .bt709_g22_8bit => .bgra8unorm,
@@ -370,7 +370,6 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
             .allocator = allocator,
             .width = width,
             .height = height,
-            .present_queue = queue,
             .backend = .{ .mtl = .{
                 .layer = layer,
                 .pixel_format = pixel_format,
@@ -378,8 +377,8 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
             } },
         };
     }
-    if ((comptime rhi.platform_has_api(.vk)) and renderer.backend == .vk) {
-        var ikb: *rhi.vulkan.vk.InstanceWrapper = &renderer.backend.vk.ikb;
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var ikb: *rhi.vulkan.vk.InstanceWrapper = &rhi.renderer.instance.backend.vk.ikb;
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const surface: rhi.vulkan.vk.SurfaceKHR = if (builtin.os.tag == .windows) {} else if (builtin.os.tag == .linux) p: {
             switch (handle) {
@@ -389,7 +388,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
                         .dpy = @ptrCast(val.display),
                         .window = val.window,
                     };
-                    break :p try ikb.createXlibSurfaceKHR(renderer.backend.vk.instance, &xlib_surface_create, null);
+                    break :p try ikb.createXlibSurfaceKHR(rhi.renderer.instance.backend.vk.instance, &xlib_surface_create, null);
                 },
                 .wayland => |val| {
                     var wayland_surface_create: rhi.vulkan.vk.WaylandSurfaceCreateInfoKHR = .{
@@ -397,7 +396,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
                         .display = @ptrCast(val.display),
                         .surface = @ptrCast(val.surface),
                     };
-                    break :p try ikb.createWaylandSurfaceKHR(renderer.backend.vk.instance, &wayland_surface_create, null);
+                    break :p try ikb.createWaylandSurfaceKHR(rhi.renderer.instance.backend.vk.instance, &wayland_surface_create, null);
                 },
             }
             return error.Unsupported;
@@ -452,6 +451,15 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
             break :found .fifo_khr;
         };
 
+        // Clamp the requested image count to the surface's supported range.
+        // A surfaceCaps value of 0 means "unspecified" — skip that side of the clamp.
+        const surface_caps = try ikb.getPhysicalDeviceSurfaceCapabilitiesKHR(device.adapter.backend.vk.physical_device, surface);
+        var desired_image_count: u32 = option.request_image_count;
+        if (surface_caps.min_image_count > 0 and desired_image_count < surface_caps.min_image_count)
+            desired_image_count = surface_caps.min_image_count;
+        if (surface_caps.max_image_count > 0 and desired_image_count > surface_caps.max_image_count)
+            desired_image_count = surface_caps.max_image_count;
+
         const swapchain_create_info = vk_wapchain_create_info_khr_default(.{
             .surface = surface,
             .format = selected_surface.format,
@@ -459,7 +467,7 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
             .color_space = selected_surface.color_space,
             .width = width,
             .height = height,
-            .image_count = option.image_count,
+            .image_count = desired_image_count,
         });
         const swapchain: rhi.vulkan.vk.SwapchainKHR = try dkb.createSwapchainKHR(device.backend.vk.device, &swapchain_create_info, null);
 
@@ -472,7 +480,6 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
         };
         errdefer allocator.free(images);
 
-        std.debug.assert(images.len == option.image_count);
         const image_views = try allocator.alloc(rhi.vulkan.vk.ImageView, images.len);
         errdefer allocator.free(image_views);
         const image_acquire_semaphores = try allocator.alloc(rhi.vulkan.vk.Semaphore, images.len);
@@ -509,7 +516,6 @@ pub fn init(allocator: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.
             .allocator = allocator,
             .width = width,
             .height = height,
-            .present_queue = queue,
             .backend = .{
                 .vk = .{
                     .format = selected_surface.format,

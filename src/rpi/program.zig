@@ -126,7 +126,6 @@ backend: union {
 /// `modules[*].data` and `layout` are borrowed; shader blobs are copied.
 pub fn initialize(
     allocator: std.mem.Allocator,
-    renderer: *rhi.Renderer,
     device: *rhi.Device,
     modules: []const ModuleStage,
     layout: Layout,
@@ -153,12 +152,12 @@ pub fn initialize(
         self.push_constant_stages = pc.stages;
     }
 
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         self.backend = .{ .vk = .{} };
         try self.initialize_vk(device, layout);
         return self;
     }
-    if (rhi.is_target_selected(.mtl, renderer)) {
+    if (rhi.is_target_selected(.mtl)) {
         self.backend = .{ .mtl = .{} };
         return self;
     }
@@ -208,8 +207,8 @@ fn build_reflection(self: *Program, layout: Layout) !void {
     }
 }
 
-pub fn deinit(self: *Program, renderer: *rhi.Renderer, device: *rhi.Device) void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+pub fn deinit(self: *Program, device: *rhi.Device) void {
+    if (rhi.is_target_selected(.vk)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const dev = device.backend.vk.device;
         var it = self.pipeline.valueIterator();
@@ -225,7 +224,7 @@ pub fn deinit(self: *Program, renderer: *rhi.Renderer, device: *rhi.Device) void
         }
         if (self.backend.vk.pipeline_layout != .null_handle)
             dkb.destroyPipelineLayout(dev, self.backend.vk.pipeline_layout, null);
-    } else if (rhi.is_target_selected(.mtl, renderer)) {
+    } else if (rhi.is_target_selected(.mtl)) {
         var it = self.pipeline.valueIterator();
         while (it.next()) |slot| {
             if (slot.mtl.render) |r| r.release();
@@ -251,18 +250,17 @@ pub fn findReflection(self: *Program, handle: DescriptorBindingID) ?*const Bindi
 /// neutral descriptor and bind it on `cmd`.
 pub fn bindPipeline(
     self: *Program,
-    renderer: *rhi.Renderer,
     device: *rhi.Device,
     cmd: *rhi.Cmd,
     pipeline_hash: u64,
     debug_name: [*:0]const u8,
     desc: GraphicsPipelineDesc,
 ) !void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         try self.bindPipelineVk(device, cmd, pipeline_hash, debug_name, desc);
         return;
     }
-    if (rhi.is_target_selected(.mtl, renderer)) {
+    if (rhi.is_target_selected(.mtl)) {
         try self.bindPipelineMtl(device, cmd, pipeline_hash, debug_name, desc);
         return;
     }
@@ -272,7 +270,6 @@ pub fn bindPipeline(
 /// Build/cache/bind the compute pipeline. Vulkan only for now.
 pub fn bindComputePipeline(
     self: *Program,
-    renderer: *rhi.Renderer,
     device: *rhi.Device,
     cmd: *rhi.Cmd,
     pipeline_hash: u64,
@@ -280,7 +277,7 @@ pub fn bindComputePipeline(
     desc: ComputePipelineDesc,
 ) !void {
     _ = desc;
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         try self.bindComputePipelineVk(device, cmd, pipeline_hash, debug_name);
         return;
     }
@@ -292,13 +289,12 @@ pub fn bindComputePipeline(
 /// Upload push constants using the program's reflected stage flags + layout.
 pub fn pushConstants(
     self: *Program,
-    renderer: *rhi.Renderer,
     device: *rhi.Device,
     cmd: *rhi.Cmd,
     data: []const u8,
     offset: u32,
 ) void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.cmdPushConstants(
             cmd.backend.vk.cmd,
@@ -310,7 +306,7 @@ pub fn pushConstants(
         );
         return;
     }
-    if (rhi.is_target_selected(.mtl, renderer)) {
+    if (rhi.is_target_selected(.mtl)) {
         // slangc emits the push-constant block at buffer(0). Set it on whichever
         // stages reference it.
         const enc = cmd.backend.mtl.encoder.?;
@@ -685,14 +681,13 @@ fn bindComputePipelineVk(
 /// buffers are a follow-up.
 pub fn bindDescriptors(
     self: *Program,
-    renderer: *rhi.Renderer,
     device: *rhi.Device,
     cmd: *rhi.Cmd,
     frame_index: u32,
     bindings: []const DescriptorBinding,
     bind_point: PipelineBindPoint,
 ) !void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         try self.bindDescriptorsVk(device, cmd, frame_index, bindings, bind_point);
         return;
     }

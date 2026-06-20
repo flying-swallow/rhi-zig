@@ -15,6 +15,7 @@ pub const cmd = @import("cmd.zig");
 pub const image = @import("image.zig");
 pub const sampler = @import("sampler.zig");
 pub const buffer = @import("buffer.zig");
+pub const acceleration_structure = @import("acceleration_structure.zig");
 pub const fence = @import("fence.zig");
 pub const pipeline_layout = @import("pipeline_layout.zig");
 pub const pipeline = @import("pipeline.zig");
@@ -24,6 +25,7 @@ pub const semaphore = @import("semaphore.zig");
 pub const scratch_alloc = @import("scratch_alloc.zig");
 pub const segment_alloc = @import("segment_alloc.zig");
 pub const offset_alloc = @import("offset_alloc.zig");
+pub const index_pool = @import("index_pool.zig");
 
 pub const Renderer = renderer.Renderer;
 pub const PhysicalAdapter = physical_adapter.PhysicalAdapter;
@@ -39,6 +41,7 @@ pub const Descriptor = descriptor.Descriptor;
 pub const Sampler = sampler.Sampler;
 pub const Format = format.Format;
 pub const Buffer = buffer.Buffer;
+pub const AccelerationStructure = acceleration_structure.AccelerationStructure;
 pub const Fence = fence.Fence;
 pub const ResourceLoader = resource_loader.ResourceLoader;
 pub const Pipeline = pipeline.Pipeline;
@@ -52,7 +55,29 @@ pub const SegmentAlloc = segment_alloc.SegmentAlloc;
 pub const SegmentAllocReq = segment_alloc.Req;
 pub const OffsetAllocator = offset_alloc.Allocator;
 pub const OffsetAllocation = offset_alloc.Allocation;
+pub const IndexPool = index_pool.IndexPool;
 pub const TimeKeeper = @import("time_keeper.zig");
+
+/// Monotonic source of resource identity cookies. A cookie is a stable, unique
+/// id stamped on a resource at creation; it is used as a descriptor-set cache
+/// key because a raw backend handle is unsafe as identity (handles get reused).
+/// `0` is reserved for "empty / uncreated".
+var cookie_counter: std.atomic.Value(u64) = .init(1);
+
+pub fn next_cookie() u64 {
+    return cookie_counter.fetchAdd(1, .monotonic);
+}
+
+/// Backend-neutral descriptor category (mirrors `RIDescriptorType_e`). The
+/// engine uses separate sampled images + samplers (no combined-image-sampler).
+pub const DescriptorType = enum {
+    sampled_image,
+    storage_image,
+    sampler,
+    uniform_buffer,
+    storage_buffer,
+    acceleration_structure,
+};
 
 pub const Selection = enum { default, vk, dx12, mtl };
 
@@ -86,9 +111,9 @@ pub const metal = if (platform_has_api(.mtl)) @import("metal.zig") else void;
 /// the caller's `if` condition: on a platform where `api` is unavailable the
 /// branch becomes comptime-false and its body (which dereferences that
 /// backend's types) is never analyzed.
-pub inline fn is_target_selected(comptime api: Backend, ren: *Renderer) bool {
+pub inline fn is_target_selected(comptime api: Backend) bool {
     if (comptime !platform_has_api(api)) return false;
-    return ren.backend == api;
+    return renderer.instance.backend == api;
 }
 
 //pub fn select(ren: *Renderer, comptime T: type, pass: T, comptime predicate: fn (comptime target: Backend, val: T) void) void {
@@ -112,11 +137,11 @@ test "metal: renderer -> adapter -> device init" {
     if (comptime !platform_has_api(.mtl)) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
-    var ren = try Renderer.init(allocator, .{ .mtl = .{} });
-    defer ren.deinit();
-    try std.testing.expectEqualStrings("Metal", ren.apiString());
+    try Renderer.init(allocator, .{ .mtl = .{} });
+    defer Renderer.deinit();
+    try std.testing.expectEqualStrings("Metal", Renderer.apiString());
 
-    var adapters = try PhysicalAdapter.enumerate_adapters(allocator, &ren);
+    var adapters = try PhysicalAdapter.enumerate_adapters(allocator);
     defer adapters.deinit(allocator);
     try std.testing.expect(adapters.items.len >= 1);
 
@@ -125,37 +150,42 @@ test "metal: renderer -> adapter -> device init" {
     try std.testing.expect(name.len > 0);
     std.debug.print("metal device: {s}\n", .{name});
 
-    var dev = try Device.init(allocator, &ren, &adapters.items[idx]);
-    defer dev.deinit(&ren);
-    try dev.graphics_queue.wait_queue_idle(&ren, &dev);
+    var dev = try Device.init(allocator, &adapters.items[idx]);
+    defer dev.deinit();
+    try dev.graphics_queue.wait_queue_idle(&dev);
 }
 
 test "metal: swapchain drawable + command buffer" {
     if (comptime !platform_has_api(.mtl)) return error.SkipZigTest;
     const allocator = std.testing.allocator;
 
-    var ren = try Renderer.init(allocator, .{ .mtl = .{} });
-    defer ren.deinit();
-    var adapters = try PhysicalAdapter.enumerate_adapters(allocator, &ren);
+    try Renderer.init(allocator, .{ .mtl = .{} });
+    defer Renderer.deinit();
+    var adapters = try PhysicalAdapter.enumerate_adapters(allocator);
     defer adapters.deinit(allocator);
     const idx = PhysicalAdapter.default_select_adapter(adapters.items);
-    var dev = try Device.init(allocator, &ren, &adapters.items[idx]);
-    defer dev.deinit(&ren);
+    var dev = try Device.init(allocator, &adapters.items[idx]);
+    defer dev.deinit();
 
     // Stand in for a window surface with an offscreen CAMetalLayer.
     const layer = metal.ca.MetalLayer.layer();
     const handle: WindowHandle = .{ .metal = .{ .layer = @ptrCast(layer.obj.value) } };
 
-    var sc = try Swapchain.init(allocator, &ren, &dev, 64, 64, &dev.graphics_queue, handle, .{});
-    defer sc.deinit(&ren, &dev);
+    var sc = try Swapchain.init(allocator, &dev, 64, 64, handle, .{});
+    defer sc.deinit(&dev);
 
-    const index = try sc.acquire_next_image(&ren, &dev);
-    const view = sc.image_view(&ren, index);
-    try std.testing.expect(view.mtl.obj.value != null);
+    const index = try sc.acquire_next_image(&dev);
+    const view = sc.image_view(index);
+    try std.testing.expect(view.backend.mtl.obj.value != null);
 
-    var pool = try Pool.init(&ren, &dev, &dev.graphics_queue);
-    defer pool.deinit(&ren, &dev);
-    var command = try Cmd.init(&ren, &dev, &pool);
-    try command.begin(&ren, &dev);
+    var pool = try Pool.init(&dev, &dev.graphics_queue);
+    defer pool.deinit(&dev);
+    var command = try Cmd.init(&dev, &pool);
+    try command.begin(&dev);
     try std.testing.expect(command.backend.mtl.cmd != null);
+}
+
+test {
+    _ = @import("acceleration_structure.zig");
+    _ = @import("cmd.zig");
 }

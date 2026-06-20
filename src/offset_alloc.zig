@@ -121,8 +121,8 @@ pub const Allocator = struct {
     free_storage: u32 = 0,
 
     used_bins_top: u32 = 0,
-    used_bins: [num_top_bins]u8 = [_]u8{0} ** num_top_bins,
-    bin_indices: [num_leaf_bins]NodeIndex = [_]NodeIndex{Node.unused} ** num_leaf_bins,
+    used_bins: [num_top_bins]u8 = @splat(0),
+    bin_indices: [num_leaf_bins]NodeIndex = @splat(Node.unused),
 
     nodes: []Node = &.{},
     free_nodes: []NodeIndex = &.{},
@@ -150,8 +150,8 @@ pub const Allocator = struct {
         self.used_bins_top = 0;
         self.free_offset = self.max_allocs - 1;
 
-        self.used_bins = [_]u8{0} ** num_top_bins;
-        self.bin_indices = [_]NodeIndex{Node.unused} ** num_leaf_bins;
+        self.used_bins = @splat(0);
+        self.bin_indices = @splat(Node.unused);
 
         if (self.nodes.len != 0) self.gpa.free(self.nodes);
         if (self.free_nodes.len != 0) self.gpa.free(self.free_nodes);

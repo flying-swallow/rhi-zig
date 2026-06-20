@@ -11,6 +11,30 @@ pub const ShaderStage = struct {
     out: []const u8,
 };
 
+/// The `build.zig.zon` dependency name for the prebuilt Slang compiler matching
+/// the build host (shaders are compiled on the host, not the target), or null
+/// if no prebuilt is shipped for this host.
+fn slangHostDep() ?[]const u8 {
+    return switch (builtin.os.tag) {
+        .linux => switch (builtin.cpu.arch) {
+            .x86_64 => "slang_linux_x86_64",
+            .aarch64 => "slang_linux_aarch64",
+            else => null,
+        },
+        .macos => switch (builtin.cpu.arch) {
+            .x86_64 => "slang_macos_x86_64",
+            .aarch64 => "slang_macos_aarch64",
+            else => null,
+        },
+        .windows => switch (builtin.cpu.arch) {
+            .x86_64 => "slang_windows_x86_64",
+            .aarch64 => "slang_windows_aarch64",
+            else => null,
+        },
+        else => null,
+    };
+}
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -103,6 +127,14 @@ pub fn build(b: *std.Build) !void {
         .{ .src = "01_mandelbrot.slang", .entry = "fragmentMain", .stage = "fragment", .out = "mandelbrot.frag" },
     };
 
+    const sdl_translate_c = b.addTranslateC(.{
+        .root_source_file = b.path("examples/sdl_includes.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sdl_translate_c.addIncludePath(sdl_dep.path("include"));
+    const sdl_c_module = sdl_translate_c.createModule();
+
     const shaders_02 = [_]ShaderStage{
         .{ .src = "02_mesh.slang", .entry = "vertexMain", .stage = "vertex", .out = "02_mesh.vert" },
         .{ .src = "02_mesh.slang", .entry = "fragmentMain", .stage = "fragment", .out = "02_mesh.frag" },
@@ -115,6 +147,22 @@ pub fn build(b: *std.Build) !void {
         .{ .file = "examples/01Shader.zig", .name = "01_shader", .shaders = shaders_01[0..], .apple = true },
         .{ .file = "examples/02Mesh.zig", .name = "02_mesh", .shaders = shaders_02[0..], .apple = true },
     };
+    // Resolve the Slang compiler used to build example shaders: an explicit
+    // `-Dslangc=` path (e.g. the Vulkan SDK's), otherwise the prebuilt release
+    // for this host — fetched lazily, so only the matching archive downloads.
+    const slangc: std.Build.LazyPath = if (b.option([]const u8, "slangc", "Path to a slangc executable (skips the prebuilt Slang download)")) |p|
+        .{ .cwd_relative = p }
+    else slang: {
+        const dep_name = slangHostDep() orelse {
+            std.log.err("no prebuilt slangc for this host; pass -Dslangc=/path/to/slangc", .{});
+            return error.UnsupportedSlangHost;
+        };
+        // Returns null on the first pass (triggers the fetch); the build then
+        // re-runs with the archive available.
+        const slang_dep = b.lazyDependency(dep_name, .{}) orelse return;
+        break :slang slang_dep.path("bin/slangc" ++ if (builtin.os.tag == .windows) ".exe" else "");
+    };
+
     for (examples) |example| {
         if (is_apple and !example.apple) continue;
         const exe = b.addExecutable(.{
@@ -125,6 +173,7 @@ pub fn build(b: *std.Build) !void {
                 .optimize = optimize,
                 .imports = &.{
                     .{ .name = "rhi", .module = engine_module },
+                    .{ .name = "sdl", .module = sdl_c_module },
                 },
             }),
         });
@@ -140,20 +189,20 @@ pub fn build(b: *std.Build) !void {
         example_cmd.step.dependOn(b.getInstallStep());
         for (example.shaders) |sh| {
             // Vulkan: Slang -> SPIR-V (always built; the rhi lib targets vk off Apple).
-            const spv = b.addSystemCommand(&.{"slangc"});
+            const spv = std.Build.Step.Run.create(b, b.fmt("{s} slangc spirv", .{sh.out}));
+            spv.addFileArg(slangc); // argv[0]: the resolved slangc binary
             spv.addFileArg(b.path(b.fmt("example_assets/{s}", .{sh.src})));
             spv.addArgs(&.{ "-target", "spirv", "-entry", sh.entry, "-stage", sh.stage, "-o" });
             spv.addArg(try b.build_root.join(b.allocator, &.{ "example_assets", b.fmt("{s}.spv", .{sh.out}) }));
-            spv.step.name = b.fmt("{s} slangc spirv", .{sh.out});
             exe.step.dependOn(&spv.step);
 
             // Metal: Slang -> MSL (Apple only). Compiled at runtime via newLibraryWithSource.
             if (is_apple) {
-                const msl = b.addSystemCommand(&.{"slangc"});
+                const msl = std.Build.Step.Run.create(b, b.fmt("{s} slangc metal", .{sh.out}));
+                msl.addFileArg(slangc);
                 msl.addFileArg(b.path(b.fmt("example_assets/{s}", .{sh.src})));
                 msl.addArgs(&.{ "-target", "metal", "-entry", sh.entry, "-stage", sh.stage, "-o" });
                 msl.addArg(try b.build_root.join(b.allocator, &.{ "example_assets", b.fmt("{s}.metal", .{sh.out}) }));
-                msl.step.name = b.fmt("{s} slangc metal", .{sh.out});
                 exe.step.dependOn(&msl.step);
             }
         }

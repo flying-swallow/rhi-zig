@@ -17,15 +17,15 @@ backend: union {
     } else void,
 },
 
-pub fn deinit(self: *Pipeline, renderer: *rhi.Renderer, device: *rhi.Device) void {
-    if (rhi.is_target_selected(.vk, renderer)) {
+pub fn deinit(self: *Pipeline, device: *rhi.Device) void {
+    if (rhi.is_target_selected(.vk)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         dkb.destroyPipeline(device.backend.vk.device, self.backend.vk.pipeline, null);
         if (self.backend.vk.layout != .null_handle)
             dkb.destroyPipelineLayout(device.backend.vk.device, self.backend.vk.layout, null);
         return;
     }
-    if (rhi.is_target_selected(.mtl, renderer)) {
+    if (rhi.is_target_selected(.mtl)) {
         if (self.backend.mtl.depth_stencil_state) |dss| dss.release();
         self.backend.mtl.state.release();
         return;
@@ -45,7 +45,7 @@ pub const mtl_vertex_buffer_base: u32 = 1;
 /// fragment shader rendering to the swapchain's color format, triangle list,
 /// dynamic viewport/scissor, with an optional vertex layout and vertex-stage
 /// push constants.
-pub fn init_graphics(renderer: *rhi.Renderer, device: *rhi.Device, options: struct {
+pub fn init_graphics(device: *rhi.Device, options: struct {
     shader: *rhi.Shader,
     swapchain: *rhi.Swapchain,
     vertex_layout: ?VertexLayout = null,
@@ -53,7 +53,7 @@ pub fn init_graphics(renderer: *rhi.Renderer, device: *rhi.Device, options: stru
     /// Enable depth testing/writing against a D32_SFLOAT depth attachment.
     depth_test: bool = false,
 }) !Pipeline {
-    if (rhi.is_target_selected(.vk, renderer)) {
+    if (rhi.is_target_selected(.vk)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const vk_shader = options.shader.backend.vk;
         var stages = [_]rhi.vulkan.vk.PipelineShaderStageCreateInfo{
@@ -171,7 +171,7 @@ pub fn init_graphics(renderer: *rhi.Renderer, device: *rhi.Device, options: stru
         _ = try dkb.createGraphicsPipelines(device.backend.vk.device, .null_handle, &create_info, null, &pipeline);
         return .{ .backend = .{ .vk = .{ .pipeline = pipeline[0], .layout = layout } } };
     }
-    if (rhi.is_target_selected(.mtl, renderer)) {
+    if (rhi.is_target_selected(.mtl)) {
         const dev = device.backend.mtl.device;
         const desc = rhi.metal.mtl.RenderPipelineDescriptor.init();
         defer desc.release();
@@ -484,7 +484,7 @@ pub const ShaderDesc = struct {
 
 pub const GraphicsPipelineDesc = struct { layout: *rhi.PipelineLayout, vertex_input: ?VertexInputDesc, input_assembly: InputAssemblyDesc, rasterization: RasterizationDesc, multisample: ?MultisampleDesc, output_merger: OutputMergerDesc, shaders: []ShaderDesc };
 
-pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Renderer, device: *rhi.Device, desc: *const GraphicsPipelineDesc) !Pipeline {
+pub fn create_graphics_pipeline(alloc: std.mem.Allocator, device: *rhi.Device, desc: *const GraphicsPipelineDesc) !Pipeline {
     var pipline_shader_stages: std.ArrayList(rhi.vulkan.vk.PipelineShaderStageCreateInfo) = .empty;
     var color_blend_attachments: std.ArrayList(rhi.vulkan.vk.PipelineColorBlendAttachmentState) = .empty;
     var color_attachment_formats: std.ArrayList(rhi.vulkan.vk.Format) = .empty;
@@ -546,7 +546,7 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, renderer: *rhi.Rendere
 
     for (desc.shaders) |shader| {
         std.debug.assert(shader.vk != null);
-        std.debug.assert(rhi.is_target_selected(.vk, renderer));
+        std.debug.assert(rhi.is_target_selected(.vk));
         var shader_module: rhi.vulkan.vk.ShaderModuleCreateInfo = .{ .code_size = shader.vk.?.code_size, .p_code = shader.vk.?.data };
         const module = dkb.createShaderModule(device.backend.vk.device, &shader_module, null) catch |err| {
             std.log.err("Failed to create fragment shader module: {}", .{err});
