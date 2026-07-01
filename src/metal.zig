@@ -17,3 +17,15 @@ pub const ca = metal.ca;
 pub const types = metal.types;
 /// The underlying Objective-C bridge.
 pub const objc = metal.objc;
+
+/// Maps a core `rhi.Format` to an `MTLPixelFormat`. Only a curated subset is
+/// supported; unsupported formats map to `.invalid`.
+pub fn to_mtl_pixel_format(format: rhi.Format) types.PixelFormat {
+    return switch (format) {
+        .rgba8_unorm => .rgba8unorm,
+        .bgra8_unorm => .bgra8unorm,
+        .bgra8_srgb  => .bgra8unorm_srgb,
+        .d32_sfloat  => .depth32float,
+        else         => .invalid,
+    };
+}

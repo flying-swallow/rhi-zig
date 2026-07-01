@@ -1,0 +1,46 @@
+.{
+    .name = .slang,
+    .version = "0.0.0",
+    .fingerprint = 0x681d367cf088eecf,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        // Prebuilt Slang shader compiler (`slangc`), one archive per host
+        // platform. Only the dependency matching the build host is fetched
+        // (all are lazy); `build.zig` picks it and exposes `bin/slangc` so the
+        // root build can compile the example `.slang` shaders. Override with
+        // `-Dslangc=/path/to/slangc` (e.g. the Vulkan SDK's) to skip the
+        // download entirely. Pinned to Slang v2026.11 — bump the URLs + hashes
+        // together to upgrade.
+        .slang_linux_x86_64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.11/slang-2026.11-linux-x86_64.tar.gz",
+            .hash = "N-V-__8AAL52sAzkD31ND7BD7RY0WXbVcd6NVB4XBNzoTh_I",
+            .lazy = true,
+        },
+        .slang_linux_aarch64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.11/slang-2026.11-linux-aarch64.tar.gz",
+            .hash = "N-V-__8AAMGXegOvF5ZMt4SpjMBjtDf4oO516ib724qq9NLS",
+            .lazy = true,
+        },
+        .slang_macos_x86_64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.11/slang-2026.11-macos-x86_64.tar.gz",
+            .hash = "N-V-__8AANcfogNZ76frZb7NFnfgwiWRbdghaCdxEgEC93NC",
+            .lazy = true,
+        },
+        .slang_macos_aarch64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.11/slang-2026.11-macos-aarch64.tar.gz",
+            .hash = "N-V-__8AAFEY2wnbT2E2U4uXCAXp1_sgIYZEsnKrH3BKmdMZ",
+            .lazy = true,
+        },
+        .slang_windows_x86_64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.11/slang-2026.11-windows-x86_64.tar.gz",
+            .hash = "N-V-__8AALyKDQvTCpubQVS6QR0C9XmJfEaOn2uJhk1Qf2RJ",
+            .lazy = true,
+        },
+        .slang_windows_aarch64 = .{
+            .url = "https://github.com/shader-slang/slang/releases/download/v2026.11/slang-2026.11-windows-aarch64.tar.gz",
+            .hash = "N-V-__8AAPaN4gS8hYVFUr9fcAC41cqBeXbpbIHvnWFi1pa0",
+            .lazy = true,
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon" },
+}

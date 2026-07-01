@@ -329,14 +329,14 @@ pub const Viewport = struct {
 };
 
 pub const ColorAttachment = struct {
-    view: rhi.Image.ImageView,
+    view: rhi.ImageView,
     load_op: LoadOp = .clear,
     store_op: StoreOp = .store,
     clear_color: [4]f32 = .{ 0, 0, 0, 1 },
 };
 
 pub const DepthAttachment = struct {
-    view: rhi.Image.ImageView,
+    view: rhi.ImageView,
     load_op: LoadOp = .clear,
     store_op: StoreOp = .store,
     clear_depth: f32 = 1.0,

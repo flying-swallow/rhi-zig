@@ -78,7 +78,7 @@ pub fn storageBuffer(device: *rhi.Device,buf: *const rhi.Buffer, offset: u64, ra
 }
 
 /// Sampled (read-only) image. Bound in `shader_read_only_optimal`.
-pub fn sampledImage(device: *rhi.Device,view: *const rhi.image.ImageView) Descriptor {
+pub fn sampledImage(device: *rhi.Device,view: *const rhi.ImageView) Descriptor {
     _ = device;
     if (rhi.is_target_selected(.vk)) {
         return .{
@@ -98,7 +98,7 @@ pub fn sampledImage(device: *rhi.Device,view: *const rhi.image.ImageView) Descri
 }
 
 /// Read/write storage image. Bound in `general`.
-pub fn storageImage(device: *rhi.Device,view: *const rhi.image.ImageView) Descriptor {
+pub fn storageImage(device: *rhi.Device,view: *const rhi.ImageView) Descriptor {
     _ = device;
     if (rhi.is_target_selected(.vk)) {
         return .{

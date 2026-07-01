@@ -25,7 +25,8 @@ pub const Context = struct {
     graphics_cmd_ring: CmdRingBuffer = undefined,
     shader: rhi.Shader = undefined,
     pipeline: rhi.Pipeline = undefined,
-    depth_texture: rhi.DepthTexture = undefined,
+    depth_image: rhi.Image = undefined,
+    depth_view: rhi.ImageView = undefined,
     cube_vertex_buffer: rhi.Buffer = undefined,
     cube_index_buffer: rhi.Buffer = undefined,
 };
@@ -59,8 +60,19 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
         var h: c_int = 0;
         if (sdl_app.sdl.SDL_GetWindowSize(cntx.window, &w, &h)) {
             _ = try cntx.swapchain.resize(&cntx.device, @intCast(w), @intCast(h));
-            cntx.depth_texture.deinit(&cntx.device);
-            cntx.depth_texture = try rhi.DepthTexture.init(&cntx.device, @intCast(w), @intCast(h));
+            cntx.depth_view.deinit(&cntx.device);
+            cntx.depth_image.deinit(&cntx.device);
+            cntx.depth_image = try rhi.Image.init(&cntx.device, .{
+                .format = .d32_sfloat,
+                .width = @intCast(w),
+                .height = @intCast(h),
+                .usage = .{ .depth_stencil_attachment = true },
+                .memory_usage = .prefer_device,
+            });
+            cntx.depth_view = try rhi.ImageView.init(&cntx.device, &cntx.depth_image, .{
+                .format = .d32_sfloat,
+                .aspect = .depth,
+            });
         } else {
             std.log.err("{s}", .{sdl_app.sdl.SDL_GetError()});
         }
@@ -80,7 +92,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     const w = cntx.swapchain.width;
     const h = cntx.swapchain.height;
 
-    var depth_img = cntx.depth_texture.image();
+    var depth_img = cntx.depth_image;
     cmd.resource_barrier(&cntx.device,.{ .image = 2 }, .{ .image_barriers = &.{
         .{ .image = &img, .before = .{}, .after = .{ .render_target = true } },
         .{ .image = &depth_img, .before = .{}, .after = .{ .depth_write = true }, .aspect = .depth },
@@ -94,7 +106,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
             .clear_color = .{ 0.0, 0.0, 0.0, 1.0 },
         }},
         .depth_attachment = .{
-            .view = cntx.depth_texture.view(),
+            .view = cntx.depth_view,
             .load_op = .clear,
             .store_op = .store,
             .clear_depth = 1.0,
@@ -211,7 +223,17 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
         .push_constant_size = @sizeOf(PushConsts),
         .depth_test = true,
     });
-    cntx.depth_texture = try rhi.DepthTexture.init(&cntx.device, 640, 480);
+    cntx.depth_image = try rhi.Image.init(&cntx.device, .{
+        .format = .d32_sfloat,
+        .width = 640,
+        .height = 480,
+        .usage = .{ .depth_stencil_attachment = true },
+        .memory_usage = .prefer_device,
+    });
+    cntx.depth_view = try rhi.ImageView.init(&cntx.device, &cntx.depth_image, .{
+        .format = .d32_sfloat,
+        .aspect = .depth,
+    });
 
     cntx.window = window.?;
     return sdl_app.sdl.SDL_APP_CONTINUE;
@@ -223,7 +245,8 @@ fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_A
         std.log.err("Failed to wait graphics queue idle: {}", .{err});
     };
 
-    cntx.depth_texture.deinit(&cntx.device);
+    cntx.depth_view.deinit(&cntx.device);
+    cntx.depth_image.deinit(&cntx.device);
     cntx.pipeline.deinit(&cntx.device);
     cntx.shader.deinit(&cntx.device);
     cntx.cube_vertex_buffer.deinit(&cntx.device);

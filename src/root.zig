@@ -13,6 +13,7 @@ pub const swapchain = @import("swapchain.zig");
 pub const descriptor = @import("descriptor.zig");
 pub const cmd = @import("cmd.zig");
 pub const image = @import("image.zig");
+pub const image_view = @import("image_view.zig");
 pub const sampler = @import("sampler.zig");
 pub const buffer = @import("buffer.zig");
 pub const acceleration_structure = @import("acceleration_structure.zig");
@@ -22,21 +23,32 @@ pub const pipeline = @import("pipeline.zig");
 pub const resource_loader = @import("resource_loader.zig");
 pub const shader = @import("shader.zig");
 pub const semaphore = @import("semaphore.zig");
+pub const timeline = @import("timeline.zig");
+pub const gpu_profiler = @import("gpu_profiler.zig");
 pub const scratch_alloc = @import("scratch_alloc.zig");
 pub const segment_alloc = @import("segment_alloc.zig");
 pub const offset_alloc = @import("offset_alloc.zig");
 pub const index_pool = @import("index_pool.zig");
 
+/// Asset loaders. Only the std-only glTF loader is wired up here; the legacy
+/// Wavefront OBJ loader depends on an external math module that is not part of
+/// the library build, so it is intentionally not re-exported.
+pub const io = struct {
+    pub const gltf = @import("io/gltf/gltf.zig");
+};
+
 pub const Renderer = renderer.Renderer;
 pub const PhysicalAdapter = physical_adapter.PhysicalAdapter;
 pub const Queue = queue.Queue;
 pub const Device = device.Device;
-pub const Swapchain = swapchain.Swapchain;
+pub const SwapchainT = swapchain.Swapchain;
+pub const Swapchain = swapchain.Swapchain(3);
 pub const WindowHandle = swapchain.WindowHandle;
 pub const Pool = cmd.Pool;
 pub const Cmd = cmd.Cmd;
 pub const Image = image.Image;
-pub const DepthTexture = image.DepthTexture;
+pub const ImageView = image_view.ImageView;
+pub const ImageViewDesc = image_view.ViewDesc;
 pub const Descriptor = descriptor.Descriptor;
 pub const Sampler = sampler.Sampler;
 pub const Format = format.Format;
@@ -48,6 +60,7 @@ pub const Pipeline = pipeline.Pipeline;
 pub const PipelineLayout = pipeline_layout.PipelineLayout;
 pub const Shader = shader.Shader;
 pub const Semaphore = semaphore.Semaphore;
+pub const Timeline = timeline.Timeline;
 pub const ScratchAlloc = scratch_alloc.ScratchAlloc;
 pub const ScratchAllocBlockMem = scratch_alloc.BlockMem;
 pub const ScratchAllocReq = scratch_alloc.AllocReq;
@@ -57,6 +70,9 @@ pub const OffsetAllocator = offset_alloc.Allocator;
 pub const OffsetAllocation = offset_alloc.Allocation;
 pub const IndexPool = index_pool.IndexPool;
 pub const TimeKeeper = @import("time_keeper.zig");
+pub const GpuPassTiming = gpu_profiler.GpuPassTiming;
+pub const GpuProfiler = gpu_profiler.GpuProfiler;
+pub const GpuScope = gpu_profiler.GpuScope;
 
 /// Monotonic source of resource identity cookies. A cookie is a stable, unique
 /// id stamped on a resource at creation; it is used as a descriptor-set cache
@@ -188,4 +204,5 @@ test "metal: swapchain drawable + command buffer" {
 test {
     _ = @import("acceleration_structure.zig");
     _ = @import("cmd.zig");
+    _ = @import("io/gltf/gltf.zig");
 }

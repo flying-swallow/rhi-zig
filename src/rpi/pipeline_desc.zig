@@ -157,17 +157,10 @@ pub const ComputePipelineDesc = struct {
     reserved: u32 = 0,
 };
 
-/// Maps a core `rhi.Format` to an `MTLPixelFormat`. The Metal binding only
-/// exposes a curated subset; unsupported formats fall through to `invalid` so
-/// the caller (pipeline build) surfaces a clear failure rather than mis-binding.
+/// Maps a core `rhi.Format` to an `MTLPixelFormat`. Delegates to
+/// `rhi.metal.to_mtl_pixel_format` which is the single source of truth.
 pub fn to_mtl_pixel_format(format: rhi.Format) rhi.metal.types.PixelFormat {
-    return switch (format) {
-        .rgba8_unorm => .rgba8unorm,
-        .bgra8_unorm => .bgra8unorm,
-        .bgra8_srgb => .bgra8unorm_srgb,
-        .d32_sfloat => .depth32float,
-        else => .invalid,
-    };
+    return rhi.metal.to_mtl_pixel_format(format);
 }
 
 /// Maps a core `rhi.Format` to an `MTLVertexFormat` for vertex attributes.
