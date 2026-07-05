@@ -1,6 +1,38 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Copy a compiled library's include directories onto a TranslateC step so the
+/// aggregator header can resolve the library's installed headers. Mirrors the
+/// helper documented by cimgui.zig for consuming its C bindings.
+fn addIncludePathsToTranslateC(translate_c: *std.Build.Step.TranslateC, lib: *std.Build.Step.Compile) void {
+    for (lib.root_module.include_dirs.items) |included| {
+        switch (included) {
+            .path => |p| translate_c.addIncludePath(p),
+            .path_system => |p| translate_c.addSystemIncludePath(p),
+            .config_header_step => |ch| translate_c.addConfigHeader(ch),
+            .other_step => |other| addIncludePathsToTranslateC(translate_c, other),
+            else => {},
+        }
+    }
+}
+
+/// Compile one Slang entry point to SPIR-V and return a LazyPath to the emitted
+/// module, for embedding via `addAnonymousImport` + `@embedFile`.
+fn compileSlangSpv(
+    b: *std.Build,
+    slangc: std.Build.LazyPath,
+    src: []const u8,
+    entry: []const u8,
+    stage: []const u8,
+    out_name: []const u8,
+) std.Build.LazyPath {
+    const run = std.Build.Step.Run.create(b, b.fmt("slangc spirv {s}", .{out_name}));
+    run.addFileArg(slangc); // argv[0]: the resolved slangc binary
+    run.addFileArg(b.path(src));
+    run.addArgs(&.{ "-target", "spirv", "-entry", entry, "-stage", stage, "-o" });
+    return run.addOutputFileArg(out_name);
+}
+
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -18,7 +50,49 @@ pub fn build(b: *std.Build) !void {
     });
 
     const lib = b.addLibrary(.{ .name = "rhi", .linkage = .static, .root_module = engine_module });
-    
+
+    // Dear ImGui, consumed as the `cimgui` module (dear_bindings' C API).
+    //
+    // Configured with no renderer/platform backends: the ImGui layer in
+    // `src/imgui.zig` renders draw data through the RHI itself, so cimgui's own
+    // imgui_impl_* backends are unused. This also keeps the core library from
+    // pulling in cimgui's bundled SDL3/Vulkan/GLFW (and avoids a duplicate SDL3
+    // against the one the examples link).
+    if (b.lazyDependency("cimgui_zig", .{
+        .target = target,
+        .optimize = optimize,
+    })) |cimgui_dep| {
+        const cimgui_lib = cimgui_dep.artifact("cimgui");
+        engine_module.linkLibrary(cimgui_lib);
+
+        const cimgui_translate_c = b.addTranslateC(.{
+            .root_source_file = b.path("src/cimgui.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        addIncludePathsToTranslateC(cimgui_translate_c, cimgui_lib);
+        engine_module.addImport("cimgui", cimgui_translate_c.createModule());
+    }
+
+    // The ImGui layer's shader is authored in Slang and compiled to SPIR-V by
+    // slangc (the same toolchain the examples use), then embedded into the
+    // module via anonymous imports (`@embedFile("imgui_vert_spv")`). slangc is
+    // resolved from an explicit `-Dslangc=` path, otherwise the prebuilt release
+    // for this host is fetched lazily.
+    {
+        const slangc: std.Build.LazyPath = if (b.option([]const u8, "slangc", "Path to a slangc executable (skips the prebuilt Slang download)")) |p|
+            .{ .cwd_relative = p }
+        else slang: {
+            const slang_pkg = b.lazyImport(@This(), "slang") orelse return;
+            const slang_dep = b.lazyDependency("slang", .{}) orelse return;
+            break :slang slang_pkg.slangc(slang_dep.builder) orelse return;
+        };
+        const vert_spv = compileSlangSpv(b, slangc, "src/shaders/imgui.slang", "vertexMain", "vertex", "imgui.vert.spv");
+        const frag_spv = compileSlangSpv(b, slangc, "src/shaders/imgui.slang", "fragmentMain", "fragment", "imgui.frag.spv");
+        engine_module.addAnonymousImport("imgui_vert_spv", .{ .root_source_file = vert_spv });
+        engine_module.addAnonymousImport("imgui_frag_spv", .{ .root_source_file = frag_spv });
+    }
+
     // The Vulkan backend (and its VMA allocator) are only wired in on non-Apple
     // targets. On Apple platforms `platform_api = {.mtl}`, so the Vulkan/VMA
     // modules are never imported by the source — and pulling them would require

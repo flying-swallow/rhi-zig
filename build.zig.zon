@@ -6,6 +6,7 @@
     .dependencies = .{
         .vma = .{ .path = "deps/vma", .lazy = true },
         .metal = .{ .path = "deps/metal", .lazy = true },
+        .slang = .{ .path = "deps/slang", .lazy = true },
         .zwindows = .{
             .url = "git+https://github.com/flying-swallow/zwindows.git#a0bcb1ddf17fc4d458dff849a895644931a921df",
             .hash = "zwindows-0.3.0-dev-xMZ1u0OlEgBe5N8_vygzx_IOFwrKSJRkQvtjOyU4Qg60",
@@ -19,8 +20,13 @@
             .hash = "vulkan-0.0.0-r7Ytx8t9AwDbdPvKCQU2qrevpeTvH9v4E9iSrnA46zZU",
         },
         .zla = .{
-            .url = "git+https://github.com/flying-swallow/zig-linear-algebra.git#02ae65d4235e8db9f9a54c68506bc952afbdcad6",
-            .hash = "zla-0.0.2-zqm18F6nAQBFAQsYpFl_Jr0lzud3zGK6y0N1l2Djm3R_",
+            .url = "git+https://github.com/flying-swallow/zig-linear-algebra.git#ef9a4eabc5efae467ae1fa487fe265e93494380e",
+            .hash = "zla-0.0.2-zqm18OSoAQB9Y-HZnZ3w2q8nb-IWilVG9V9fD_f1EgrO",
+        },
+        .cimgui_zig = .{
+            .url = "git+https://github.com/flying-swallow/cimgui.zig.git#586f550a3f4b62e1e5a079423a49949e1ae7e8bf",
+            .hash = "cimgui_zig-1.0.0-2XubktoywgAzLDlJekw0BUYAVZP51poiEG585IA5W2hQ",
+            .lazy = true,
         },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src" },

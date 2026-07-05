@@ -29,12 +29,37 @@ pub const scratch_alloc = @import("scratch_alloc.zig");
 pub const segment_alloc = @import("segment_alloc.zig");
 pub const offset_alloc = @import("offset_alloc.zig");
 pub const index_pool = @import("index_pool.zig");
+/// Dear ImGui rendering layer + the raw dear_bindings C API (for building UI).
+pub const imgui = @import("imgui.zig");
+pub const imgui_c = @import("cimgui");
 
 /// Asset loaders. Only the std-only glTF loader is wired up here; the legacy
 /// Wavefront OBJ loader depends on an external math module that is not part of
 /// the library build, so it is intentionally not re-exported.
 pub const io = struct {
     pub const gltf = @import("io/gltf/gltf.zig");
+};
+
+/// The higher-level "render-program interface" layer built on top of the core
+/// rhi module (a Zig port of the C++ engine's RIProgram). It bundles, for one
+/// set of shader stages, a pipeline layout, a hash-keyed pipeline cache, and
+/// descriptor sets resolved by name. Vulkan-complete; on Metal only the
+/// render-pipeline cache + push constants are supported today.
+pub const rpi = struct {
+    pub const Program = @import("rpi/program.zig");
+    pub const binding = @import("rpi/binding.zig");
+    pub const pipeline_desc = @import("rpi/pipeline_desc.zig");
+    pub const descriptor_set_alloc = @import("rpi/descriptor_set_alloc.zig");
+
+    pub const Layout = binding.Layout;
+    pub const LayoutBinding = binding.LayoutBinding;
+    pub const ModuleStage = binding.ModuleStage;
+    pub const DescriptorBinding = binding.DescriptorBinding;
+    pub const ShaderStageFlags = binding.ShaderStageFlags;
+    pub const ProgramStage = binding.ProgramStage;
+    pub const PushConstantRange = binding.PushConstantRange;
+    pub const GraphicsPipelineDesc = pipeline_desc.GraphicsPipelineDesc;
+    pub const ComputePipelineDesc = pipeline_desc.ComputePipelineDesc;
 };
 
 pub const Renderer = renderer.Renderer;
@@ -59,6 +84,7 @@ pub const ResourceLoader = resource_loader.ResourceLoader;
 pub const Pipeline = pipeline.Pipeline;
 pub const PipelineLayout = pipeline_layout.PipelineLayout;
 pub const Shader = shader.Shader;
+pub const ImGui = imgui.ImguiLayer;
 pub const Semaphore = semaphore.Semaphore;
 pub const Timeline = timeline.Timeline;
 pub const ScratchAlloc = scratch_alloc.ScratchAlloc;
@@ -205,4 +231,28 @@ test {
     _ = @import("acceleration_structure.zig");
     _ = @import("cmd.zig");
     _ = @import("io/gltf/gltf.zig");
+}
+
+// Type-check the whole Vulkan render-program path (rpi layer) without needing a
+// live device: taking the address of each public entry point forces semantic
+// analysis of its body — and thus of `descriptor_set_alloc.zig`, the pipeline
+// build, and `bindDescriptors`. The Metal-only branches inside these methods are
+// comptime-gated by `is_target_selected(.mtl)` and are not analyzed here. Skipped
+// (and not compiled past the guard) on non-Vulkan targets.
+test "rpi: type-check the vulkan render-program paths" {
+    if (comptime !platform_has_api(.vk)) return error.SkipZigTest;
+    const P = @import("rpi/program.zig");
+    _ = &P.initialize;
+    _ = &P.deinit;
+    _ = &P.bindPipeline;
+    _ = &P.bindComputePipeline;
+    _ = &P.bindDescriptors;
+    _ = &P.bindBindlessDescriptorSet;
+    _ = &P.pushConstants;
+    _ = &P.bindRayTracingPipeline;
+    _ = &P.traceRays;
+    _ = &P.findReflection;
+    _ = @import("rpi/binding.zig");
+    _ = @import("rpi/pipeline_desc.zig");
+    _ = @import("rpi/descriptor_set_alloc.zig");
 }

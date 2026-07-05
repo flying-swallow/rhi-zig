@@ -26,7 +26,7 @@ pub const ProgramStage = enum(u8) {
     intersection = 7,
     callable = 8,
 
-    pub const count = @typeInfo(ProgramStage).@"enum".fields.len;
+    pub const count = @typeInfo(ProgramStage).@"enum".field_names.len;
 };
 
 /// Which shader stages a binding / push-constant range is visible to. Mirrors

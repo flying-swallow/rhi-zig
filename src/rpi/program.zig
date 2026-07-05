@@ -45,10 +45,12 @@ pub const DESCRIPTOR_SET_MAX = 4;
 /// Max distinct shader-input attribute locations a vertex stage can reflect.
 pub const MAX_VERTEX_ATTRIBUTES = 16;
 
-/// One per-stage shader binary (an owned copy of the SPIR-V / MSL blob).
+/// One per-stage shader binary (an owned copy of the SPIR-V / MSL blob). The
+/// entry point is stored NUL-terminated so its `.ptr` is a valid C string for
+/// `VkPipelineShaderStageCreateInfo::pName`.
 const ShaderBinary = struct {
     buf: []u8 = &.{},
-    entry_point: []u8 = &.{},
+    entry_point: [:0]u8 = @constCast(&[_:0]u8{}),
 };
 
 /// Cache value for a built backend pipeline. The active arm is determined by the
@@ -96,7 +98,7 @@ const DescriptorSetSlot = struct {
 allocator: std.mem.Allocator,
 device: *rhi.Device,
 
-shader_bin: [ProgramStage.count]ShaderBinary = [_]ShaderBinary{.{}} ** ProgramStage.count,
+shader_bin: [ProgramStage.count]ShaderBinary = @splat(.{}),
 binding_reflection: std.ArrayListUnmanaged(BindingReflection) = .empty,
 
 has_push_constant: bool = false,
@@ -107,7 +109,7 @@ vertex_input_mask: u32 = 0,
 
 pipeline: std.AutoHashMapUnmanaged(u64, PipelineSlot) = .empty,
 
-program_descriptors: [DESCRIPTOR_SET_MAX]DescriptorSetSlot = [_]DescriptorSetSlot{.{}} ** DESCRIPTOR_SET_MAX,
+program_descriptors: [DESCRIPTOR_SET_MAX]DescriptorSetSlot = @splat(.{}),
 
 backend: union {
     vk: rhi.wrapper_platform_type(.vk, struct {
@@ -138,7 +140,8 @@ pub fn initialize(
         const idx = @intFromEnum(m.stage);
         const buf = try allocator.dupe(u8, m.data);
         errdefer allocator.free(buf);
-        const entry = try allocator.dupe(u8, m.entry_point);
+        const entry = try allocator.allocSentinel(u8, m.entry_point.len, 0);
+        @memcpy(entry, m.entry_point);
         self.shader_bin[idx] = .{ .buf = buf, .entry_point = entry };
     }
 
@@ -218,7 +221,7 @@ pub fn deinit(self: *Program, device: *rhi.Device) void {
         self.backend.vk.rt_pipeline.deinit(self.allocator);
         for (&self.program_descriptors) |*slot| {
             if (slot.is_external or !slot.used) continue;
-            slot.backend.vk.alloc.free(device);
+            slot.backend.vk.alloc.free(self.allocator, device);
             if (slot.backend.vk.set_layout != .null_handle)
                 dkb.destroyDescriptorSetLayout(dev, slot.backend.vk.set_layout, null);
         }
@@ -403,9 +406,9 @@ fn initialize_vk(self: *Program, device: *rhi.Device, layout: Layout) !void {
 
     // Accumulate per-set layout bindings.
     var set_bindings: [DESCRIPTOR_SET_MAX]std.ArrayListUnmanaged(rhi.vulkan.vk.DescriptorSetLayoutBinding) =
-        [_]std.ArrayListUnmanaged(rhi.vulkan.vk.DescriptorSetLayoutBinding){.empty} ** DESCRIPTOR_SET_MAX;
+        @splat(.empty);
     var set_flags: [DESCRIPTOR_SET_MAX]std.ArrayListUnmanaged(rhi.vulkan.vk.DescriptorBindingFlags) =
-        [_]std.ArrayListUnmanaged(rhi.vulkan.vk.DescriptorBindingFlags){.empty} ** DESCRIPTOR_SET_MAX;
+        @splat(.empty);
     defer for (0..DESCRIPTOR_SET_MAX) |i| {
         set_bindings[i].deinit(a);
         set_flags[i].deinit(a);
@@ -432,7 +435,7 @@ fn initialize_vk(self: *Program, device: *rhi.Device, layout: Layout) !void {
     }
 
     var set_layouts: [DESCRIPTOR_SET_MAX]rhi.vulkan.vk.DescriptorSetLayout =
-        [_]rhi.vulkan.vk.DescriptorSetLayout{.null_handle} ** DESCRIPTOR_SET_MAX;
+        @splat(.null_handle);
 
     for (0..layout_count) |i| {
         if (external_layout_for(layout, i)) |ext| {
@@ -457,8 +460,25 @@ fn initialize_vk(self: *Program, device: *rhi.Device, layout: Layout) !void {
             set_layouts[i] = try dkb.createDescriptorSetLayout(dev, &create_info, null);
         }
         var slot = &self.program_descriptors[i];
-        slot.backend = .{ .vk = .{ .set_layout = set_layouts[i] } };
-        slot.backend.vk.alloc = dsa.Alloc.init(slot, dsa.RI_NUMBER_FRAMES_FLIGHT);
+        slot.backend = .{ .vk = .{
+            .set_layout = set_layouts[i],
+            .alloc = dsa.Alloc.init(.{
+                .set_layout = set_layouts[i],
+                .sizes = .{
+                    .sampler = slot.sampler_max,
+                    .combined_image_sampler = slot.combined_image_sampler_max,
+                    .constant_buffer = slot.constant_buffer_max,
+                    .dynamic_constant_buffer = slot.dynamic_constant_buffer_max,
+                    .texture = slot.texture_max,
+                    .storage_texture = slot.storage_texture_max,
+                    .buffer = slot.buffer_max,
+                    .storage_buffer = slot.storage_buffer_max,
+                    .structured_buffer = slot.structured_buffer_max,
+                    .storage_structured_buffer = slot.storage_structured_buffer_max,
+                    .acceleration_structure = slot.acceleration_structure_max,
+                },
+            }, dsa.RI_NUMBER_FRAMES_FLIGHT),
+        } };
     }
 
     var push_range: [1]rhi.vulkan.vk.PushConstantRange = undefined;
@@ -626,7 +646,7 @@ fn bindPipelineVk(
         }};
         rhi.vulkan.add_next(&create_info[0], &rendering_info);
         var handle: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
-        _ = try dkb.createGraphicsPipelines(dev, .null_handle, 1, &create_info, null, &handle);
+        _ = try dkb.createGraphicsPipelines(dev, .null_handle, &create_info, null, &handle);
         gop.value_ptr.* = .{ .vk = .{ .handle = handle[0] } };
     }
     dkb.cmdBindPipeline(cmd.backend.vk.cmd, .graphics, gop.value_ptr.vk.handle);
@@ -665,7 +685,7 @@ fn bindComputePipelineVk(
             .base_pipeline_index = -1,
         }};
         var handle: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
-        _ = try dkb.createComputePipelines(dev, .null_handle, 1, &create_info, null, &handle);
+        _ = try dkb.createComputePipelines(dev, .null_handle, &create_info, null, &handle);
         gop.value_ptr.* = .{ .vk = .{ .handle = handle[0] } };
     }
     dkb.cmdBindPipeline(cmd.backend.vk.cmd, .compute, gop.value_ptr.vk.handle);
@@ -722,7 +742,7 @@ fn bindDescriptorsVk(
 
         // Identity hash over the bindings landing in this set.
         var hash: u64 = std.hash.Wyhash.hash(0, "rpi.descset");
-        for (bindings) |b| {
+        for (bindings) |*b| {
             const refl = self.findReflection(b.handle) orelse continue;
             if (refl.set != set_index or b.descriptor.cookie == 0) continue;
             hash = mix(hash, refl.hash);
@@ -734,32 +754,54 @@ fn bindDescriptorsVk(
         const result = try slot.backend.vk.alloc.resolve(self.allocator, device, frame_index, hash);
         if (!result.found) {
             var writes: [32]rhi.vulkan.vk.WriteDescriptorSet = undefined;
+            // Per-write payload storage kept alive across the vkUpdateDescriptorSets
+            // flush: the DescriptorBinding's descriptor is a caller-owned value, so
+            // its VkDescriptor*Info must be copied into stable storage before the
+            // WriteDescriptorSet pointers can reference it (mirrors RIProgram.cpp).
+            var image_infos: [32]rhi.vulkan.vk.DescriptorImageInfo = undefined;
+            var buffer_infos: [32]rhi.vulkan.vk.DescriptorBufferInfo = undefined;
+            var accel_handles: [32]rhi.vulkan.vk.AccelerationStructureKHR = undefined;
+            var accel_writes: [32]rhi.vulkan.vk.WriteDescriptorSetAccelerationStructureKHR = undefined;
             var n: usize = 0;
-            for (bindings) |b| {
+            for (bindings) |*b| {
                 const refl = self.findReflection(b.handle) orelse continue;
                 if (refl.set != set_index or b.descriptor.cookie == 0) continue;
                 if (n == writes.len) {
-                    dkb.updateDescriptorSets(dev, @intCast(n), &writes, 0, null);
+                    dkb.updateDescriptorSets(dev, writes[0..n], null);
                     n = 0;
                 }
-                var w = &writes[n];
-                n += 1;
+                const w = &writes[n];
                 w.* = .{
                     .dst_set = result.set.handle,
                     .dst_binding = if (refl.is_array) refl.base_register_index else @as(u32, refl.base_register_index) + b.register_offset,
                     .dst_array_element = if (refl.is_array) b.register_offset else 0,
                     .descriptor_count = 1,
                     .descriptor_type = b.descriptor.backend.vk.type,
-                    .p_image_info = @ptrCast(&b.descriptor.backend.vk.view.image),
-                    .p_buffer_info = @ptrCast(&b.descriptor.backend.vk.view.buffer),
+                    // Point at the per-write stable slots; Vulkan reads only the one
+                    // matching descriptor_type, the others are ignored.
+                    .p_image_info = @ptrCast(&image_infos[n]),
+                    .p_buffer_info = @ptrCast(&buffer_infos[n]),
                     .p_texel_buffer_view = undefined,
                 };
+                switch (b.descriptor.type) {
+                    .uniform_buffer, .storage_buffer => buffer_infos[n] = b.descriptor.backend.vk.view.buffer,
+                    .sampler, .sampled_image, .storage_image => image_infos[n] = b.descriptor.backend.vk.view.image,
+                    .acceleration_structure => {
+                        accel_handles[n] = b.descriptor.backend.vk.view.accel;
+                        accel_writes[n] = .{
+                            .acceleration_structure_count = 1,
+                            .p_acceleration_structures = @ptrCast(&accel_handles[n]),
+                        };
+                        w.p_next = &accel_writes[n];
+                    },
+                }
+                n += 1;
             }
-            if (n > 0) dkb.updateDescriptorSets(dev, @intCast(n), &writes, 0, null);
+            if (n > 0) dkb.updateDescriptorSets(dev, writes[0..n], null);
         }
 
         if (bind_count > 0 and first_set + bind_count != set_index) {
-            dkb.cmdBindDescriptorSets(cmd.backend.vk.cmd, vk_bind, self.backend.vk.pipeline_layout, first_set, bind_count, &sets_to_bind, 0, null);
+            dkb.cmdBindDescriptorSets(cmd.backend.vk.cmd, vk_bind, self.backend.vk.pipeline_layout, first_set, sets_to_bind[0..bind_count], null);
             bind_count = 0;
         }
         if (bind_count == 0) first_set = @intCast(set_index);
@@ -767,7 +809,7 @@ fn bindDescriptorsVk(
         bind_count += 1;
     }
     if (bind_count > 0) {
-        dkb.cmdBindDescriptorSets(cmd.backend.vk.cmd, vk_bind, self.backend.vk.pipeline_layout, first_set, bind_count, &sets_to_bind, 0, null);
+        dkb.cmdBindDescriptorSets(cmd.backend.vk.cmd, vk_bind, self.backend.vk.pipeline_layout, first_set, sets_to_bind[0..bind_count], null);
     }
 }
 
@@ -788,7 +830,7 @@ pub fn bindBindlessDescriptorSet(
         .ray_tracing => .ray_tracing_khr,
     };
     const sets = [_]rhi.vulkan.vk.DescriptorSet{set};
-    dkb.cmdBindDescriptorSets(cmd.backend.vk.cmd, vk_bind, self.backend.vk.pipeline_layout, set_index, 1, &sets, 0, null);
+    dkb.cmdBindDescriptorSets(cmd.backend.vk.cmd, vk_bind, self.backend.vk.pipeline_layout, set_index, &sets, null);
 }
 
 // ---------------------------------------------------------------------------

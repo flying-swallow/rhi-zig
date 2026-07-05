@@ -18,6 +18,15 @@
         // compile the example `.slang` shaders. Override with
         // `-Dslangc=/path/to/slangc` to skip the download entirely.
         .slang = .{ .path = "../deps/slang", .lazy = true },
+
+        // Linear-algebra helpers (column-major, right-handed, Vulkan 0..1 depth),
+        // used by 04SVT for its view/projection math. Same pin as the root
+        // build.zig.zon; this revision gates zla's benchmark behind
+        // `b.isRoot()`, so consuming it as a dependency no longer pulls zbench.
+        .zla = .{
+            .url = "git+https://github.com/flying-swallow/zig-linear-algebra.git#ef9a4eabc5efae467ae1fa487fe265e93494380e",
+            .hash = "zla-0.0.2-zqm18OSoAQB9Y-HZnZ3w2q8nb-IWilVG9V9fD_f1EgrO",
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "example_assets" },
 }

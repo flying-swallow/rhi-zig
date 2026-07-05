@@ -43,6 +43,31 @@ pub fn sdl_window_handle_to_rhi_window_handle(window: *sdl.SDL_Window) !rhi.Wind
     return error.SdlError;
 }
 
+/// Honor a `--video-driver <name>` / `--video-driver=<name>` command-line flag by
+/// forcing SDL's video backend (e.g. `x11` so the example can be captured in
+/// RenderDoc, which doesn't support Wayland). Must be called before `SDL_Init`.
+/// Any SDL driver name is accepted; without the flag SDL auto-selects as usual.
+fn applyVideoDriverArg(init: std.process.Init) void {
+    // `iterateAllocator` compiles on every target (the allocator-free `iterate`
+    // is a Windows compile error); on POSIX the allocation/deinit are trivial.
+    var it = init.minimal.args.iterateAllocator(init.gpa) catch return;
+    defer it.deinit();
+    _ = it.next(); // skip the program name
+    while (it.next()) |arg| {
+        const driver: ?[:0]const u8 =
+            if (std.mem.startsWith(u8, arg, "--video-driver="))
+                arg["--video-driver=".len..] // tail of a [:0] slice keeps its sentinel
+            else if (std.mem.eql(u8, arg, "--video-driver"))
+                it.next()
+            else
+                null;
+        if (driver) |name| {
+            _ = sdl.SDL_SetHintWithPriority(sdl.SDL_HINT_VIDEO_DRIVER, name.ptr, sdl.SDL_HINT_OVERRIDE);
+            std.log.info("Forcing SDL video driver: {s}", .{name});
+        }
+    }
+}
+
 pub fn SdlApplicaton(comptime Context: type, handlers: struct {
     iterate_handler: fn (cntx: *AppContext(Context)) anyerror!sdl.SDL_AppResult,
     app_init: fn (cntx: *AppContext(Context), argv: [][*:0]u8) anyerror!sdl.SDL_AppResult,
@@ -102,6 +127,11 @@ pub fn SdlApplicaton(comptime Context: type, handlers: struct {
             context.io = init.io;
             context.gpa = init.gpa;
             context.frame_arean = std.heap.ArenaAllocator.init(context.gpa);
+
+            // Optional: force the SDL video driver (e.g. `--video-driver x11` to
+            // run under RenderDoc, which doesn't support Wayland). Must happen
+            // before SDL_Init, which the app_init handler calls.
+            applyVideoDriverArg(init);
 
             var empty_argv: [0:null]?[*:0]u8 = .{};
             const status: u8 = @truncate(@as(c_uint, @bitCast(sdl.SDL_RunApp(empty_argv.len, @ptrCast(&empty_argv), sdlMainC, null))));

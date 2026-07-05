@@ -22,6 +22,15 @@ pub fn build(b: *std.Build) !void {
     });
     const rhi_module = rhi_dep.module("rhi");
 
+    // Linear-algebra helpers for 04SVT's view/projection math. The pinned zla
+    // revision gates its benchmark behind `b.isRoot()`, so consuming it as a
+    // dependency here no longer pulls the `zbench` dev-dependency. Available to
+    // every example module; only the ones that `@import("zla")` pull it in.
+    const zla_module = b.dependency("zla", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("zla");
+
     const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
 
     // SDL is a lazy dependency so the workspace can build without compiling
@@ -49,12 +58,26 @@ pub fn build(b: *std.Build) !void {
         .{ .src = "02_mesh.slang", .entry = "fragmentMain", .stage = "fragment", .out = "02_mesh.frag" },
     };
 
+    const shaders_04 = [_]ShaderStage{
+        // Shared vertex stage + the final composite fragment stage.
+        .{ .src = "04_svt.slang", .entry = "vertexMain", .stage = "vertex", .out = "04_svt.vert" },
+        .{ .src = "04_svt.slang", .entry = "compositeMain", .stage = "fragment", .out = "04_svt_composite.frag" },
+        // Feedback fragment stage (writes requested page ids into an SSBO).
+        .{ .src = "04_svt_feedback.slang", .entry = "feedbackMain", .stage = "fragment", .out = "04_svt_feedback.frag" },
+    };
+
     // `apple` marks examples that have been ported to the backend-agnostic API
     // and therefore build on macOS/iOS (Metal). The others are still Vulkan-only.
     const examples = [_]struct { file: []const u8, name: []const u8, shaders: []const ShaderStage = &.{}, apple: bool = false }{
         .{ .file = "00Clear.zig", .name = "00_clear", .apple = true },
         .{ .file = "01Shader.zig", .name = "01_shader", .shaders = shaders_01[0..], .apple = true },
         .{ .file = "02Mesh.zig", .name = "02_mesh", .shaders = shaders_02[0..], .apple = true },
+        // ImGui shaders are embedded in the core rhi library; no shader step
+        // here. Vulkan-only until the Metal texture/sampler path lands.
+        .{ .file = "03Imgui.zig", .name = "03_imgui", .apple = false },
+        // Software virtual texturing through the rpi layer. Vulkan-only: rpi's
+        // name-resolved descriptor binding is not yet implemented on Metal.
+        .{ .file = "04SVT.zig", .name = "04_svt", .shaders = shaders_04[0..], .apple = false },
     };
     // Resolve the Slang compiler used to build example shaders: an explicit
     // `-Dslangc=` path (e.g. the Vulkan SDK's), otherwise the prebuilt release
@@ -81,6 +104,7 @@ pub fn build(b: *std.Build) !void {
                 .imports = &.{
                     .{ .name = "rhi", .module = rhi_module },
                     .{ .name = "sdl", .module = sdl_c_module },
+                    .{ .name = "zla", .module = zla_module },
                 },
             }),
         });
