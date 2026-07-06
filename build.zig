@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 const std = @import("std");
 const builtin = @import("builtin");
 

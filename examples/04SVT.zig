@@ -1,3 +1,12 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
+//!
+//! Copyright 2018 Ales Mlakar. All rights reserved.
+//! License: https://github.com/bkaradzic/bgfx/blob/master/LICENSE
+//!
+
+
 //! 04-svt — software virtual texturing, in the spirit of bgfx's examples/40-svt,
 //! built to show off the higher-level `rpi` (render-program) layer.
 //!

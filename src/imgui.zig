@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! Dear ImGui rendering layer built on top of the RHI.
 //!
 //! Renders ImGui's draw data through the RHI's `rpi.Program` (a backend-neutral

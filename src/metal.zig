@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! RHI-side wrapper over the `deps/metal` binding fabric, mirroring how
 //! `vulkan.zig` wraps the `vulkan` module. Re-exports the Metal / Foundation /
 //! QuartzCore namespaces and hosts RHI-specific Metal helpers (e.g. format

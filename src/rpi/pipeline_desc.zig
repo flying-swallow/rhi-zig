@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! Backend-neutral pipeline descriptors for the `rpi` (render-program
 //! interface) layer. These mirror `RIGraphicsPipelineDesc` /
 //! `RIComputePipelineDesc` from the C++ engine: the same call site builds a

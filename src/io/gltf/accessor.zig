@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! Typed reading of glTF accessor data into plain Zig slices.
 //!
 //! These helpers decode the Buffer -> BufferView -> Accessor indirection,

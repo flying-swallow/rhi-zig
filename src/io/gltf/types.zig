@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! glTF 2.0 JSON schema as Zig structs, suitable for `std.json` static parsing.
 //!
 //! Field names are spelled exactly as the glTF JSON keys (camelCase) because

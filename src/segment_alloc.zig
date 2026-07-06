@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 const std = @import("std");
 
 pub const max_segments: usize = 8;
@@ -78,7 +81,7 @@ pub const SegmentAlloc = struct {
             std.debug.assert(self.head != self.tail);
         }
 
-        std.debug.assert(self.element_offset < max);
+        std.debug.assert(self.element_offset <= max);
 
         // Not enough total free space.
         if (max - self.elements_consumed < num_elements) {
@@ -123,4 +126,29 @@ pub const SegmentAlloc = struct {
 
 pub inline fn is_continuous(current_offset: usize, current_num_elements: usize, next_offset: usize) bool {
     return current_offset + current_num_elements == next_offset;
+}
+
+test "alloc wraps when the write cursor lands exactly on max_elements" {
+    const testing = std.testing;
+    // max = 8 with 2 elements per frame walks the cursor 0 -> 2 -> 4 -> 6 -> 8.
+    // num_segments = 3 keeps enough history reclaimed that the ring never fills,
+    // so frame 3's perfect tail fit leaves element_offset == max (the state that
+    // previously tripped the `element_offset < max` assertion), and frame 4 must
+    // wrap cleanly to offset 0.
+    var seg = SegmentAlloc.init(.{ .max_elements = 8, .element_stride = 4, .num_segments = 3 });
+
+    const expected_offsets = [_]u32{ 0, 2, 4, 6 };
+    for (0..4) |frame| {
+        const req = seg.alloc(@intCast(frame), 2) orelse return error.UnexpectedNull;
+        try testing.expectEqual(expected_offsets[frame], req.element_offset);
+        try testing.expect(seg.element_offset <= @as(usize, seg.max_elements));
+    }
+
+    // Frame 3's tail fit parks the write cursor exactly on max.
+    try testing.expectEqual(@as(usize, 8), seg.element_offset);
+
+    // Frame 4 must wrap to offset 0 instead of asserting.
+    const wrapped = seg.alloc(4, 2) orelse return error.UnexpectedNull;
+    try testing.expectEqual(@as(u32, 0), wrapped.element_offset);
+    try testing.expect(seg.element_offset <= @as(usize, seg.max_elements));
 }

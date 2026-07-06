@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! By convention, root.zig is the root source file when making a library.
 const std = @import("std");
 
@@ -231,6 +234,7 @@ test {
     _ = @import("acceleration_structure.zig");
     _ = @import("cmd.zig");
     _ = @import("io/gltf/gltf.zig");
+    _ = @import("segment_alloc.zig");
 }
 
 // Type-check the whole Vulkan render-program path (rpi layer) without needing a

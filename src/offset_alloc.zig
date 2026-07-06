@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! Port of Sebastian Aaltonen's OffsetAllocator (MIT, 2023).
 //!
 //! A two-level segregated-fit (TLSF-like) allocator that hands out

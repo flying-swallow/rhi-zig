@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! glTF loader tests over real model fixtures (curated from the tinygltf test
 //! suite — see testdata/README.md). Coverage mirrors the applicable, non-fuzz
 //! cases from tinygltf `tests/tester.cc`; serialization, custom-JSON-parser,

@@ -1,7 +1,7 @@
-// 04-svt — software virtual texturing, driven through the rhi `rpi` layer.
-// This file holds the shared vertex stage + the final composite fragment stage.
-// The feedback fragment stage lives in 04_svt_feedback.slang so neither program's
-// SPIR-V carries a descriptor the other one owns.
+//!
+//! Copyright 2018 Ales Mlakar. All rights reserved.
+//! License: https://github.com/bkaradzic/bgfx/blob/master/LICENSE
+//!
 
 // Composite program bindings (set 0). Distinct from the feedback program's b0.
 [[vk::binding(1)]] Texture2D<float4> pageTable;   // "s_page_table"

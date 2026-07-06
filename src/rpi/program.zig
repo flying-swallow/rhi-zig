@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! `Program` — the rpi-layer render program. A higher-level abstraction over the
 //! core `rhi` layer that bundles, for one set of shader stages:
 //!   * the per-stage shader binaries,

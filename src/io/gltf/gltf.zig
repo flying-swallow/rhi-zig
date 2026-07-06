@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! Native Zig glTF 2.0 loader (`.gltf` JSON and `.glb` binary).
 //!
 //! `loadFromSlice` parses the document and resolves every buffer/image to raw

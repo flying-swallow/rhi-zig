@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 const rhi = @import("root.zig");
 const std = @import("std");
 const gpu_preset = @import("gpu_preset.zig");

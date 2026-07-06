@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 const updates_per_s = 60;
 const max_accumulated_updates = 8;
 const snap_frame_rates = .{ updates_per_s, 30, 120, 144 };

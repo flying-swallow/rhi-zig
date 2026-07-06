@@ -1,3 +1,6 @@
+// Copyright 2026 Michael Pollind
+// SPDX-License-Identifier: GPL-2.0-only
+
 //! Frame-aware descriptor-set allocator — the piece `rpi/program.zig` imports as
 //! `descriptor_set_alloc.zig` but that was never committed. It is a faithful Zig
 //! port of Amnesia64 HPL2's `RIDescriptorSetAllocator.h/.cpp` plus the per-program
