@@ -121,9 +121,58 @@ pub fn SdlApplicaton(comptime Context: type, handlers: struct {
             handlers.app_quit(&context, result);
             context.frame_arean.deinit();
         }
+        fn sdlEventWatcher(appstate: ?*anyopaque, event: [*c]sdl.SDL_Event) callconv(.c) bool {
+            _ = appstate;
+            // During a live window resize SDL_PumpEvents can block for up to ~1s
+            // inside a single SDL_PollEvent, freezing our owned loop — so the only
+            // chance to draw a frame is from this watch, which SDL dispatches
+            // synchronously as it pumps.
+            //
+            // Render ONLY on SDL_EVENT_WINDOW_EXPOSED: SDL documents it as "should be
+            // redrawn, and can be redrawn directly from event watchers", and the
+            // compositor throttles it to the refresh cadence. Do NOT render on
+            // RESIZED/PIXEL_SIZE_CHANGED — those stream in per compositor configure,
+            // and drawing a full vsync-blocked frame (+ swapchain recreate) on each
+            // one stalls the pump so it can't ack the next configure, making the
+            // window lag behind the cursor. iterate_handler already polls the current
+            // window size and rebuilds the swapchain, so the next EXPOSED renders the
+            // latest size regardless.
+            if (event.*.type == sdl.SDL_EVENT_WINDOW_EXPOSED) {
+                _ = handlers.iterate_handler(&context) catch |err| {
+                    std.debug.print("Error in iterate handler: {any}\n", .{err});
+                };
+            }
+            // Watch callbacks' return value is ignored by SDL; return true.
+            return true;
+        }
 
         fn sdlMainC(argc: c_int, argv: ?[*:null]?[*:0]u8) callconv(.c) c_int {
-            return sdl.SDL_EnterAppMainCallbacks(argc, @ptrCast(argv), sdlAppInitC, sdlAppIterateC, sdlAppEventC, sdlAppQuitC);
+            // Drive the app with an explicit loop instead of
+            // SDL_EnterAppMainCallbacks: under the callback model SDL_PumpEvents
+            // blocks for up to ~1s between iterate calls during a Wayland
+            // interactive resize, starving rendering. Owning the loop and pumping
+            // with non-blocking SDL_PollEvent keeps the render cadence under our
+            // control. (SDL_RunApp still wraps this for platform bootstrapping.)
+            const init_rc = sdlAppInitC(null, argc, argv);
+            if (init_rc != sdl.SDL_APP_CONTINUE) {
+                sdlAppQuitC(null, init_rc);
+                return if (init_rc == sdl.SDL_APP_FAILURE) 1 else 0;
+            }
+            _ = sdl.SDL_AddEventWatch(sdlEventWatcher, null);
+            var result: sdl.SDL_AppResult = sdl.SDL_APP_CONTINUE;
+            loop: while (result == sdl.SDL_APP_CONTINUE) {
+                var event: sdl.SDL_Event = undefined;
+                while (sdl.SDL_PollEvent(&event)) {
+                    const er = sdlAppEventC(null, &event);
+                    if (er != sdl.SDL_APP_CONTINUE) {
+                        result = er;
+                        continue :loop;
+                    }
+                }
+                result = sdlAppIterateC(null);
+            }
+            sdlAppQuitC(null, result);
+            return if (result == sdl.SDL_APP_FAILURE) 1 else 0;
         }
 
         pub fn exec(init: std.process.Init) u8 {

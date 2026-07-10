@@ -120,7 +120,7 @@ pub fn CommandRingBuffer(
             mtl: if (rhi.platform_has_api(.mtl)) void else void,
         },
         pub fn advance(self: *Self) void {
-            self.pool_index = (self.cmd_index + 1) % options.pool_count;
+            self.pool_index = (self.pool_index + 1) % options.pool_count;
             self.cmd_index = 0;
             self.fence_index = 0;
         }

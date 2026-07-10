@@ -378,8 +378,6 @@ fn create_sampler(device: *rhi.Device) !rhi.Sampler {
 /// Upload tightly-packed RGBA8 pixels into `image` via a staging buffer and a
 /// one-shot, blocking command submission.
 fn upload_texture(device: *rhi.Device, image: *rhi.Image, pixels: [*c]u8, w: u32, h: u32) !void {
-    const vk = rhi.vulkan.vk;
-    const dkb: *vk.DeviceWrapper = &device.backend.vk.dkb;
     const size: usize = @as(usize, w) * @as(usize, h) * 4;
 
     var staging = try rhi.Buffer.init_general(device, .{
@@ -403,10 +401,6 @@ fn upload_texture(device: *rhi.Device, image: *rhi.Image, pixels: [*c]u8, w: u32
     cmd.image_barrier(device, .{ .image = image, .before = .{ .copy_dst = true }, .after = .{ .shader_resource = true } });
     try cmd.end(device);
 
-    var submits = [_]vk.SubmitInfo{.{
-        .command_buffer_count = 1,
-        .p_command_buffers = @ptrCast(&cmd.backend.vk.cmd),
-    }};
-    try dkb.queueSubmit(device.graphics_queue.backend.vk.queue, &submits, .null_handle);
-    try dkb.queueWaitIdle(device.graphics_queue.backend.vk.queue);
+    try device.graphics_queue.submit(device, .{ .vk = .{ .cmds = &.{&cmd} } });
+    try device.graphics_queue.wait_queue_idle(device);
 }

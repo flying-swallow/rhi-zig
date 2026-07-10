@@ -214,13 +214,21 @@ fn swapchainRhiFormat(sc: *rhi.Swapchain) rhi.Format {
 const is_apple = builtin.os.tag == .macos or builtin.os.tag == .ios;
 pub const CmdRingBuffer = rhi.Cmd.CommandRingBuffer(.{ .pool_count = FB_RING, .sync_primative = true });
 
+/// The swapchain is a ref-counted box: each frame it is enqueued into `deferral`
+/// (ref++), so its ref-count tracks how many in-flight frames still use it. On a
+/// resize the old box's usage refs drain over the next frames and it self-disposes.
+const SwapchainRef = rhi.gpu_ref.GPURef(rhi.Swapchain, .heap);
+const Deferral = rhi.timline_deferral.TimelineDeferral(&.{*SwapchainRef});
+
 pub const Context = struct {
     window: *sdl_app.sdl.SDL_Window = undefined,
-    swapchain: rhi.Swapchain = undefined,
+    swapchain: *SwapchainRef = undefined,
     device: rhi.Device = undefined,
     timekeeper: rhi.TimeKeeper = undefined,
-    dirty_resize: bool = false,
     graphics_cmd_ring: CmdRingBuffer = undefined,
+    timeline: rhi.Timeline = undefined,
+    deferral: Deferral = undefined,
+    force_rebuild: bool = false,
 
     feedback_program: rpi.Program = undefined,
     composite_program: rpi.Program = undefined,
@@ -268,16 +276,51 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     var cntx = &app_context.inner;
     while (cntx.timekeeper.consume()) {}
 
-    if (@atomicRmw(bool, &cntx.dirty_resize, .Xchg, false, .monotonic) == true) {
-        var w: c_int = 0;
-        var h: c_int = 0;
-        if (sdl_app.sdl.SDL_GetWindowSize(cntx.window, &w, &h)) {
-            _ = try cntx.swapchain.resize(&cntx.device, @intCast(w), @intCast(h));
+    // Reclaim swapchains (and anything else parked) whose frames the GPU has finished.
+    cntx.deferral.drain(try cntx.timeline.completed(&cntx.device));
+
+    // Poll the window size and rebuild the swapchain if it changed or a previous
+    // acquire/present reported OUT_OF_DATE (HPL2-style; no resize event / resize()).
+    {
+        var pw: c_int = 0;
+        var ph: c_int = 0;
+        const have_size = sdl_app.sdl.SDL_GetWindowSize(cntx.window, &pw, &ph);
+        const presentable = have_size and pw > 0 and ph > 0;
+        if (presentable and (cntx.force_rebuild or
+            cntx.swapchain.inner.width != @as(u16, @intCast(pw)) or
+            cntx.swapchain.inner.height != @as(u16, @intCast(ph))))
+        {
+            const next = try rhi.Swapchain.init(app_context.gpa, &cntx.device, .{
+                .width = @intCast(pw),
+                .height = @intCast(ph),
+                .queue = &cntx.device.graphics_queue,
+                .source = .{ .old_swapchain = &cntx.swapchain.inner },
+            });
+            if (!next.isEmpty()) {
+                const box = try SwapchainRef.create(app_context.gpa, &cntx.device, next);
+                cntx.swapchain.deref(); // drop our ref on the old box; it self-disposes
+                cntx.swapchain = box; //   once its per-frame usage refs drain
+                cntx.force_rebuild = false;
+            }
         }
     }
 
+    // Acquire before starting the ImGui frame: on OUT_OF_DATE skip the whole frame
+    // (nothing may wait on the unsignaled acquire semaphore, and the frame counter /
+    // ImGui frame stay untouched) and rebuild next frame.
+    var swapchain_index: u32 = undefined;
+    switch (try cntx.swapchain.inner.acquire_next_image(&cntx.device, &swapchain_index)) {
+        .out_of_date => {
+            cntx.force_rebuild = true;
+            return sdl_app.sdl.SDL_APP_CONTINUE;
+        },
+        else => {},
+    }
+
+    // Mark the swapchain as used by this frame (usage ref++).
+    try cntx.deferral.enqueue(cntx.swapchain);
+
     cntx.graphics_cmd_ring.advance();
-    const swapchain_index = try cntx.swapchain.acquire_next_image(&cntx.device);
     var ring_element = cntx.graphics_cmd_ring.get(&cntx.device, 1);
     try ring_element.wait(&cntx.device);
 
@@ -388,8 +431,8 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     cntx.resources_initialized = true;
 
     // Shared transform + params.
-    const w = cntx.swapchain.width;
-    const h = cntx.swapchain.height;
+    const w = cntx.swapchain.inner.width;
+    const h = cntx.swapchain.inner.height;
     const aspect = @as(f32, @floatFromInt(w)) / @as(f32, @floatFromInt(h));
     const now = sdl_app.sdl.SDL_GetTicks();
     const dt: f32 = @as(f32, @floatFromInt(now -% cntx.last_ticks)) / 1000.0;
@@ -463,8 +506,8 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     cmd.end_rendering(&cntx.device);
 
     // --- Composite pass: sample the atlas through the page table into the swapchain.
-    var img = cntx.swapchain.image(swapchain_index);
-    const view = cntx.swapchain.image_view(swapchain_index);
+    var img = cntx.swapchain.inner.image(swapchain_index);
+    const view = cntx.swapchain.inner.image_view(swapchain_index);
     cmd.image_barrier(&cntx.device, .{ .image = &img, .before = .{}, .after = .{ .render_target = true } });
 
     cmd.begin_rendering(&cntx.device, .{
@@ -473,7 +516,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     });
     cmd.set_viewport(&cntx.device, .{ .width = @floatFromInt(w), .height = @floatFromInt(h) });
     cmd.set_scissor(&cntx.device, .{ .width = w, .height = h });
-    const color_atts = [_]rpi.pipeline_desc.ColorAttachment{.{ .format = swapchainRhiFormat(&cntx.swapchain) }};
+    const color_atts = [_]rpi.pipeline_desc.ColorAttachment{.{ .format = swapchainRhiFormat(&cntx.swapchain.inner) }};
     try cntx.composite_program.bindPipeline(&cntx.device, cmd, 2, "svt_composite", .{
         .topology = .triangle_list,
         .cull_mode = .none,
@@ -500,11 +543,16 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
 
     cmd.image_barrier(&cntx.device, .{ .image = &img, .before = .{ .render_target = true }, .after = .{ .present = true } });
 
-    try cntx.swapchain.frame_submit(&cntx.device, &cntx.device.graphics_queue, .{
+    const present_status = try cntx.swapchain.inner.frame_submit(&cntx.device, &cntx.device.graphics_queue, .{
         .image_index = swapchain_index,
         .ring_element = &ring_element,
         .cmd = cmd,
+        .timeline = &cntx.timeline,
     });
+    if (present_status == .out_of_date) cntx.force_rebuild = true;
+
+    // Close this frame's usage batch at the timeline value the submit signalled.
+    try cntx.deferral.seal(cntx.timeline.pending());
 
     cntx.frame += 1;
     cntx.timekeeper.produce(sdl_app.sdl.SDL_GetPerformanceCounter());
@@ -609,11 +657,19 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
     defer adapters.deinit(app_context.gpa);
     const selected = rhi.PhysicalAdapter.default_select_adapter(adapters.items[0..]);
     cntx.device = try rhi.Device.init(app_context.gpa, &adapters.items[selected]);
-    cntx.swapchain = try rhi.Swapchain.init(app_context.gpa, &cntx.device, 1024, 640, window_handle, .{});
+    const swapchain = try rhi.Swapchain.init(app_context.gpa, &cntx.device, .{
+        .width = 1024,
+        .height = 640,
+        .queue = &cntx.device.graphics_queue,
+        .source = .{ .window_handle = window_handle },
+    });
+    cntx.swapchain = try SwapchainRef.create(app_context.gpa, &cntx.device, swapchain);
     cntx.timekeeper = .{ .tocks_per_s = sdl_app.sdl.SDL_GetPerformanceFrequency() };
     cntx.graphics_cmd_ring = try CmdRingBuffer.init(&cntx.device, &cntx.device.graphics_queue);
-    cntx.imgui = try rhi.ImGui.init(app_context.gpa, &cntx.device, &cntx.swapchain);
-    cntx.dirty_resize = false;
+    cntx.timeline = try rhi.Timeline.init(&cntx.device);
+    cntx.deferral = Deferral.init(app_context.gpa);
+    cntx.imgui = try rhi.ImGui.init(app_context.gpa, &cntx.device, &cntx.swapchain.inner);
+    cntx.force_rebuild = false;
     cntx.frame = 0;
     cntx.uploads_total = 0;
     cntx.resources_initialized = false;
@@ -744,6 +800,13 @@ fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_A
         std.log.err("wait idle: {}", .{err});
     };
 
+    // GPU is idle: release every per-frame usage ref, then our own ref on the
+    // current swapchain (last owner -> Swapchain.deinit + free the box).
+    cntx.deferral.drain(cntx.timeline.pending());
+    cntx.swapchain.deref();
+    cntx.deferral.deinit();
+    cntx.timeline.deinit(&cntx.device);
+
     cntx.imgui.deinit(&cntx.device);
     cntx.feedback_program.deinit(&cntx.device);
     cntx.composite_program.deinit(&cntx.device);
@@ -761,7 +824,6 @@ fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_A
     cntx.quad_ib.deinit(&cntx.device);
     cntx.cache.deinit(cntx.gpa);
     cntx.graphics_cmd_ring.deinit(&cntx.device);
-    cntx.swapchain.deinit(&cntx.device);
     cntx.device.deinit();
     rhi.Renderer.deinit();
     _ = result;
@@ -772,7 +834,6 @@ fn app_event(app_context: *sdl_app.AppContext(Context), event: *sdl_app.sdl.SDL_
     var cntx = &app_context.inner;
     switch (event.type) {
         sdl.SDL_EVENT_QUIT => return sdl.SDL_APP_SUCCESS,
-        sdl.SDL_EVENT_WINDOW_RESIZED => @atomicStore(bool, &cntx.dirty_resize, true, .monotonic),
         sdl.SDL_EVENT_MOUSE_MOTION => {
             cntx.imgui.addMousePosEvent(event.motion.x, event.motion.y);
             if (cntx.fly_mode) {

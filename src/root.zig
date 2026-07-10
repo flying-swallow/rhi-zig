@@ -32,6 +32,8 @@ pub const scratch_alloc = @import("scratch_alloc.zig");
 pub const segment_alloc = @import("segment_alloc.zig");
 pub const offset_alloc = @import("offset_alloc.zig");
 pub const index_pool = @import("index_pool.zig");
+pub const timline_deferral = @import("timeline_deferral.zig");
+pub const gpu_ref = @import("gpu_ref.zig");
 /// Dear ImGui rendering layer + the raw dear_bindings C API (for building UI).
 pub const imgui = @import("imgui.zig");
 pub const imgui_c = @import("cimgui");
@@ -216,7 +218,7 @@ test "metal: swapchain drawable + command buffer" {
     const layer = metal.ca.MetalLayer.layer();
     const handle: WindowHandle = .{ .metal = .{ .layer = @ptrCast(layer.obj.value) } };
 
-    var sc = try Swapchain.init(allocator, &dev, 64, 64, handle, .{});
+    var sc = try Swapchain.init(allocator, &dev, .{ .width = 64, .height = 64, .source = .{ .window_handle = handle } });
     defer sc.deinit(&dev);
 
     const index = try sc.acquire_next_image(&dev);
