@@ -7,21 +7,26 @@
         .vma = .{ .path = "deps/vma", .lazy = true },
         .metal = .{ .path = "deps/metal", .lazy = true },
         .slang = .{ .path = "deps/slang", .lazy = true },
+        // Lazy + resolved only for a Windows target (see build.zig): it pulls a
+        // glfw_zig/wayland_zig/toolbox chain that isn't needed off Windows and
+        // breaks on newer zig nightlies (toolbox uses the deleted
+        // std.Uri.getHostAlloc).
         .zwindows = .{
             .url = "git+https://github.com/flying-swallow/zwindows.git#a0bcb1ddf17fc4d458dff849a895644931a921df",
             .hash = "zwindows-0.3.0-dev-xMZ1u0OlEgBe5N8_vygzx_IOFwrKSJRkQvtjOyU4Qg60",
+            .lazy = true,
         },
         .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
             .hash = "N-V-__8AAAkkoQGn5z1yoNVrwqZfnYmZp8AZ5CJgoHRMQI0c",
         },
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig.git#241d88f280ccf156cafd5008934e016081cbe2a2",
-            .hash = "vulkan-0.0.0-r7Ytx8t9AwDbdPvKCQU2qrevpeTvH9v4E9iSrnA46zZU",
+            .url = "git+https://github.com/Snektron/vulkan-zig.git#057180744c666bb62e20877fe106422784a5e29a",
+            .hash = "vulkan-0.0.0-r7Ytx_6DAwDB1QJAbIew5IzR2PiiAtJENX5kdJHf449X",
         },
         .cimgui_zig = .{
-            .url = "git+https://github.com/flying-swallow/cimgui.zig.git#586f550a3f4b62e1e5a079423a49949e1ae7e8bf",
-            .hash = "cimgui_zig-1.0.0-2XubktoywgAzLDlJekw0BUYAVZP51poiEG585IA5W2hQ",
+            .url = "git+https://github.com/flying-swallow/cimgui.zig.git#4a85aa3a7c7bd825ad5e9b54fa531ca0cb70f3e0",
+            .hash = "cimgui_zig-1.0.0-2XubkqQ3wgDetMzfITqi4Sjb5Ny8_u5-W-8TZgB8L2_5",
             .lazy = true,
         },
         .zml = .{

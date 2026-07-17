@@ -50,17 +50,21 @@ pub fn getSlangc(b: *std.Build, rhi_dep: ?*std.Build.Dependency) ?std.Build.Lazy
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
-    const zwindows = b.dependency("zwindows", .{
+    const zwindows: ?*std.Build.Dependency = if (builtin.target.os.tag == .windows) b.lazyDependency("zwindows", .{
         .zxaudio2_debug_layer = (builtin.mode == .Debug),
         .zd3d12_debug_layer = (builtin.mode == .Debug),
         .zd3d12_gbv = b.option(bool, "zd3d12_gbv", "Enable GPU-Based Validation") orelse false,
-    });
+    }) else null;
 
     const engine_module = b.addModule("rhi", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{ .{ .name = "zwindows", .module = zwindows.module("zwindows") }, .{ .name = "zd3d12", .module = zwindows.module("zd3d12") }, .{ .name = "zxaudio2", .module = zwindows.module("zxaudio2") } },
+        .imports = if (zwindows) |zw| &.{
+            .{ .name = "zwindows", .module = zw.module("zwindows") },
+            .{ .name = "zd3d12", .module = zw.module("zd3d12") },
+            .{ .name = "zxaudio2", .module = zw.module("zxaudio2") },
+        } else &.{},
     });
 
     const lib = b.addLibrary(.{ .name = "rhi", .linkage = .static, .root_module = engine_module });
@@ -134,10 +138,17 @@ pub fn build(b: *std.Build) !void {
     }
 
     if (builtin.target.os.tag == .windows) {
-        const zwindow = @import("zwindows");
-        const activate_zwindows = zwindow.activateSdk(b, zwindows);
-        lib.step.dependOn(activate_zwindows);
-        zwindow.install_d3d12(&lib.step, zwindows, .bin);
+        // lazyImport (not @import): zwindows is a lazy dep now, so its build
+        // helpers must be imported the same way as the lazy `slang` package —
+        // a plain @import would be comptime-resolved even on non-Windows and
+        // fail because the dep isn't fetched there.
+        if (b.lazyImport(@This(), "zwindows")) |zwindow| {
+            if (zwindows) |zw| {
+                const activate_zwindows = zwindow.activateSdk(b, zw);
+                lib.step.dependOn(activate_zwindows);
+                zwindow.install_d3d12(&lib.step, zw, .bin);
+            }
+        }
     }
     // Install vendored binaries
 
