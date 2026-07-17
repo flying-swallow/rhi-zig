@@ -12,12 +12,7 @@
             .lazy = true,
         },
 
-        // Prebuilt Slang shader compiler (`slangc`), packaged under deps/slang.
-        // It picks the archive matching the build host (all lazy, so only that
-        // one downloads) and exposes `bin/slangc`, which `build.zig` runs to
-        // compile the example `.slang` shaders. Override with
-        // `-Dslangc=/path/to/slangc` to skip the download entirely.
-        .slang = .{ .path = "../deps/slang", .lazy = true },
+
 
         // Linear-algebra helpers (column-major, right-handed, Vulkan 0..1 depth),
         // used by 04SVT for its view/projection math. Same pin as the root

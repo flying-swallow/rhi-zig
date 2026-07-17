@@ -48,8 +48,8 @@ pub fn GpuProfiler(comptime num_slots: u32) type {
         total_ms: f32,
 
         pub fn init(self: *Self, allocator: std.mem.Allocator, device: *rhi.Device) !void {
-            self.open_stack = .{};
-            self.results = .{};
+            self.open_stack = .empty;
+            self.results = .empty;
             self.active_slot = 0;
             self.enabled = false;
             self.ticks_to_ms = 0;
@@ -94,7 +94,7 @@ pub fn GpuProfiler(comptime num_slots: u32) type {
                         .timeline_value = 0,
                         .resolved = true,
                         .query_count = 0,
-                        .scopes = .{},
+                        .scopes = .empty,
                         .backend = .{ .vk = .{
                             .pool = try dkb.createQueryPool(vk_device, &create_info, null),
                         } },
@@ -111,7 +111,7 @@ pub fn GpuProfiler(comptime num_slots: u32) type {
                         .timeline_value = 0,
                         .resolved = true,
                         .query_count = 0,
-                        .scopes = .{},
+                        .scopes = .empty,
                         .backend = .{ .mtl = {} },
                     };
                 }
@@ -211,7 +211,7 @@ pub fn GpuProfiler(comptime num_slots: u32) type {
             if (!self.enabled) return;
             if (self.open_stack.items.len == 0) return;
 
-            const scope_idx = self.open_stack.pop();
+            const scope_idx = self.open_stack.pop().?; // len checked above
             const s = &self.slots[self.active_slot];
             const scope = &s.scopes.items[scope_idx];
 

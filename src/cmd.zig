@@ -752,6 +752,47 @@ pub fn copy_buffer_to_texture(self: *Cmd, device: *rhi.Device, options: struct {
     @panic("copy_buffer_to_texture: not yet implemented on the Metal backend");
 }
 
+/// Copy one texture subresource into a buffer region. `src` must already be in
+/// the `copy_src` (TRANSFER_SRC_OPTIMAL) state. `buffer_row_length` and
+/// `buffer_image_height` are in texels (0 = tightly packed).
+pub fn copy_texture_to_buffer(self: *Cmd, device: *rhi.Device, options: struct {
+    src: *rhi.Image,
+    dst: *rhi.Buffer,
+    buffer_offset: u64 = 0,
+    buffer_row_length: u32 = 0,
+    buffer_image_height: u32 = 0,
+    mip_level: u32 = 0,
+    base_array_layer: u32 = 0,
+    layer_count: u32 = 1,
+    aspect: BarrierAspect = .color,
+    x: i32 = 0,
+    y: i32 = 0,
+    z: i32 = 0,
+    width: u32,
+    height: u32,
+    depth: u32 = 1,
+}) void {
+    if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+        var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+        const regions = [_]rhi.vulkan.vk.BufferImageCopy{.{
+            .buffer_offset = options.buffer_offset,
+            .buffer_row_length = options.buffer_row_length,
+            .buffer_image_height = options.buffer_image_height,
+            .image_subresource = .{
+                .aspect_mask = vk_barrier_aspect(options.aspect),
+                .mip_level = options.mip_level,
+                .base_array_layer = options.base_array_layer,
+                .layer_count = options.layer_count,
+            },
+            .image_offset = .{ .x = options.x, .y = options.y, .z = options.z },
+            .image_extent = .{ .width = options.width, .height = options.height, .depth = options.depth },
+        }};
+        dkb.cmdCopyImageToBuffer(self.backend.vk.cmd, options.src.backend.vk.image, .transfer_src_optimal, options.dst.backend.vk.buffer, regions[0..]);
+        return;
+    }
+    @panic("copy_texture_to_buffer: not yet implemented on the Metal backend");
+}
+
 /// Copy a single 1:1 region between textures (no scaling). `src`/`dst` must be in
 /// the `copy_src`/`copy_dst` states. Caller owns the surrounding barriers.
 pub fn copy_image(self: *Cmd, device: *rhi.Device, options: struct {
@@ -845,6 +886,7 @@ pub const ResourceState = struct {
     accel_read: bool = false, // acceleration structure read
     accel_write: bool = false, // acceleration structure build write
     clear_storage: bool = false, // GENERAL, vkCmdClear* transfer write
+    host_read: bool = false, // buffer only; carries no image layout
 
     // Named composite mirroring RIResourceState_e's OR'd value (the UNDEFINED
     // state is just the all-false default, `.{}`).
@@ -863,6 +905,11 @@ pub const BarrierStages = struct {
     blit: bool = false,
     clear: bool = false,
     accel_build: bool = false,
+    // COLOR_ATTACHMENT_OUTPUT. Needed as a before-stage on the first barrier
+    // after swapchain acquire: the acquire semaphore is waited at this stage,
+    // and an UNDEFINED before-state alone derives no src stage to chain to it.
+    color_attachment: bool = false,
+    host: bool = false,
 
     pub const all_graphics: BarrierStages = .{ .vertex = true, .fragment = true };
     pub const all_shader: BarrierStages = .{ .vertex = true, .fragment = true, .compute = true, .ray_tracing = true };
@@ -956,6 +1003,7 @@ fn vk_resource_state_access(state: ResourceState) rhi.vulkan.vk.AccessFlags2 {
     if (state.accel_read) access.acceleration_structure_read_bit_khr = true;
     if (state.accel_write) access.acceleration_structure_write_bit_khr = true;
     if (state.clear_storage) access.transfer_write_bit = true;
+    if (state.host_read) access.host_read_bit = true;
     return access;
 }
 
@@ -984,6 +1032,7 @@ fn vk_resource_state_stages(state: ResourceState) rhi.vulkan.vk.PipelineStageFla
     if (state.vertex_buffer or state.index_buffer) flags.vertex_input_bit = true;
     if (state.accel_read or state.accel_write) flags.acceleration_structure_build_bit_khr = true;
     if (state.clear_storage) flags.clear_bit = true;
+    if (state.host_read) flags.host_bit = true;
     // UNDEFINED / PRESENT contribute no stages.
     return flags;
 }
@@ -1001,6 +1050,8 @@ fn vk_barrier_stages(hint: BarrierStages, state_fallback: ResourceState) rhi.vul
         .blit_bit = hint.blit,
         .clear_bit = hint.clear,
         .acceleration_structure_build_bit_khr = hint.accel_build,
+        .color_attachment_output_bit = hint.color_attachment,
+        .host_bit = hint.host,
     };
 }
 

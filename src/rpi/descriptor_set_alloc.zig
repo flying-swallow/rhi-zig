@@ -29,9 +29,11 @@ const vk = if (rhi.platform_has_api(.vk)) rhi.vulkan.vk else void;
 const Program = @import("program.zig");
 const binding = @import("binding.zig");
 
-/// Frames a set stays resident before it may be recycled. Matches the swapchain
-/// ring depth (`rhi.Swapchain = Swapchain(3)`).
-pub const RI_NUMBER_FRAMES_FLIGHT: u32 = 3;
+/// Frames a set stays resident before it may be recycled. This is a descriptor
+/// lifetime window, not the swapchain depth: it must be >= the largest
+/// consumer's CPU frames-in-flight or a set still referenced by an in-flight
+/// command buffer can be rewritten (zcraft rings 4 frames; +1 margin).
+pub const RI_NUMBER_FRAMES_FLIGHT: u32 = 5;
 
 /// Sets allocated per pool (mirrors `DESCRIPTOR_MAX_SIZE` in RIProgram.cpp).
 const DESCRIPTOR_MAX_SIZE: u32 = 64;

@@ -21,7 +21,7 @@ fn addIncludePathsToTranslateC(translate_c: *std.Build.Step.TranslateC, lib: *st
 
 /// Compile one Slang entry point to SPIR-V and return a LazyPath to the emitted
 /// module, for embedding via `addAnonymousImport` + `@embedFile`.
-fn compileSlangSpv(
+pub fn compileSlangSpv(
     b: *std.Build,
     slangc: std.Build.LazyPath,
     src: []const u8,
@@ -34,6 +34,17 @@ fn compileSlangSpv(
     run.addFileArg(b.path(src));
     run.addArgs(&.{ "-target", "spirv", "-entry", entry, "-stage", stage, "-o" });
     return run.addOutputFileArg(out_name);
+}
+
+/// Exposes the prebuilt `slangc` executable from the `slang` dependency.
+pub fn getSlangc(b: *std.Build, rhi_dep: ?*std.Build.Dependency) ?std.Build.LazyPath {
+    if (b.option([]const u8, "slangc", "Path to a slangc executable (skips the prebuilt Slang download)")) |p| {
+        return .{ .cwd_relative = p };
+    }
+    const builder = if (rhi_dep) |d| d.builder else b;
+    const slang_pkg = builder.lazyImport(@This(), "slang") orelse return null;
+    const slang_dep = builder.lazyDependency("slang", .{}) orelse return null;
+    return slang_pkg.slangc(slang_dep.builder);
 }
 
 pub fn build(b: *std.Build) !void {
@@ -83,13 +94,7 @@ pub fn build(b: *std.Build) !void {
     // resolved from an explicit `-Dslangc=` path, otherwise the prebuilt release
     // for this host is fetched lazily.
     {
-        const slangc: std.Build.LazyPath = if (b.option([]const u8, "slangc", "Path to a slangc executable (skips the prebuilt Slang download)")) |p|
-            .{ .cwd_relative = p }
-        else slang: {
-            const slang_pkg = b.lazyImport(@This(), "slang") orelse return;
-            const slang_dep = b.lazyDependency("slang", .{}) orelse return;
-            break :slang slang_pkg.slangc(slang_dep.builder) orelse return;
-        };
+        const slangc = getSlangc(b, null) orelse return;
         const vert_spv = compileSlangSpv(b, slangc, "src/shaders/imgui.slang", "vertexMain", "vertex", "imgui.vert.spv");
         const frag_spv = compileSlangSpv(b, slangc, "src/shaders/imgui.slang", "fragmentMain", "fragment", "imgui.frag.spv");
         engine_module.addAnonymousImport("imgui_vert_spv", .{ .root_source_file = vert_spv });

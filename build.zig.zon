@@ -19,15 +19,15 @@
             .url = "git+https://github.com/Snektron/vulkan-zig.git#241d88f280ccf156cafd5008934e016081cbe2a2",
             .hash = "vulkan-0.0.0-r7Ytx8t9AwDbdPvKCQU2qrevpeTvH9v4E9iSrnA46zZU",
         },
-        .zla = .{
-            .url = "git+https://github.com/flying-swallow/zig-linear-algebra.git#ef9a4eabc5efae467ae1fa487fe265e93494380e",
-            .hash = "zla-0.0.2-zqm18OSoAQB9Y-HZnZ3w2q8nb-IWilVG9V9fD_f1EgrO",
-        },
         .cimgui_zig = .{
             .url = "git+https://github.com/flying-swallow/cimgui.zig.git#586f550a3f4b62e1e5a079423a49949e1ae7e8bf",
             .hash = "cimgui_zig-1.0.0-2XubktoywgAzLDlJekw0BUYAVZP51poiEG585IA5W2hQ",
             .lazy = true,
         },
+        .zml = .{
+            .url = "git+https://github.com/flying-swallow/zml.git#06d3e36bd572fa88a6cc10907ec0ff2d3b3b53e3",
+            .hash = "zml-0.2.0-9dDMRJDYAwBiY9-SnTUJs61E3XuJl2G1Q8VBflEyeb8G",
+        },
     },
-    .paths = .{ "build.zig", "build.zig.zon", "src" },
+    .paths = .{ "build.zig", "build.zig.zon", "src", "deps" },
 }

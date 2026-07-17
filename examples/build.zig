@@ -82,19 +82,10 @@ pub fn build(b: *std.Build) !void {
         // name-resolved descriptor binding is not yet implemented on Metal.
         .{ .file = "04SVT.zig", .name = "04_svt", .shaders = shaders_04[0..], .apple = false },
     };
-    // Resolve the Slang compiler used to build example shaders: an explicit
-    // `-Dslangc=` path (e.g. the Vulkan SDK's), otherwise the prebuilt release
-    // for this host — fetched lazily, so only the matching archive downloads.
-    const slangc: std.Build.LazyPath = if (b.option([]const u8, "slangc", "Path to a slangc executable (skips the prebuilt Slang download)")) |p|
-        .{ .cwd_relative = p }
-    else slang: {
-        // deps/slang resolves the prebuilt `slangc` for this host. `slangc()`
-        // returns null on the first pass (triggers the archive fetch); the
-        // build then re-runs with it available.
-        const slang_pkg = b.lazyImport(@This(), "slang") orelse return;
-        const slang_dep = b.lazyDependency("slang", .{}) orelse return;
-        break :slang slang_pkg.slangc(slang_dep.builder) orelse return;
-    };
+    // Resolve the Slang compiler used to build example shaders: obtained from
+    // the rhi dependency, which manages the prebuilt Slang download.
+    const rhi_pkg = b.lazyImport(@This(), "rhi") orelse return;
+    const slangc = rhi_pkg.getSlangc(b, rhi_dep) orelse return;
 
     for (examples) |example| {
         if (is_apple and !example.apple) continue;
