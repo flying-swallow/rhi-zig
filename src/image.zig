@@ -69,19 +69,19 @@ pub fn init(
     if (rhi.is_target_selected(.vk)) {
         // zig fmt: off
         const usage = rhi.vulkan.vk.ImageUsageFlags{
-            .transfer_src_bit = options.usage.transfer_src,
-            .transfer_dst_bit = options.usage.transfer_dst,
-            .sampled_bit = options.usage.sampled,
-            .storage_bit = options.usage.storage,
-            .color_attachment_bit = options.usage.color_attachment,
-            .depth_stencil_attachment_bit = options.usage.depth_stencil_attachment,
-            .fragment_shading_rate_attachment_bit_khr = options.usage.shading_rate,
-            .transient_attachment_bit = options.usage.transient_attachment,
-            .input_attachment_bit = options.usage.input_attachment,
+            .transfer_src = options.usage.transfer_src,
+            .transfer_dst = options.usage.transfer_dst,
+            .sampled = options.usage.sampled,
+            .storage = options.usage.storage,
+            .color_attachment = options.usage.color_attachment,
+            .depth_stencil_attachment = options.usage.depth_stencil_attachment,
+            .fragment_shading_rate_attachment_khr = options.usage.shading_rate,
+            .transient_attachment = options.usage.transient_attachment,
+            .input_attachment = options.usage.input_attachment,
         };
         const create_flags = rhi.vulkan.vk.ImageCreateFlags{
-            .cube_compatible_bit = options.flags.cube_compatible,
-            .block_texel_view_compatible_bit = options.flags.block_texel_view_compatible,
+            .cube_compatible = options.flags.cube_compatible,
+            .block_texel_view_compatible = options.flags.block_texel_view_compatible,
         };
         // zig fmt: on
 
@@ -97,13 +97,13 @@ pub fn init(
             .mip_levels = options.mip_levels,
             .array_layers = options.array_layers,
             .samples = switch (options.samples) {
-                .@"1" => .{ .@"1_bit" = true },
-                .@"2" => .{ .@"2_bit" = true },
-                .@"4" => .{ .@"4_bit" = true },
-                .@"8" => .{ .@"8_bit" = true },
-                .@"16" => .{ .@"16_bit" = true },
-                .@"32" => .{ .@"32_bit" = true },
-                .@"64" => .{ .@"64_bit" = true },
+                .@"1" => .{ .@"1" = true },
+                .@"2" => .{ .@"2" = true },
+                .@"4" => .{ .@"4" = true },
+                .@"8" => .{ .@"8" = true },
+                .@"16" => .{ .@"16" = true },
+                .@"32" => .{ .@"32" = true },
+                .@"64" => .{ .@"64" = true },
             },
             .tiling = switch (options.tiling) {
                 .optimal => .optimal,

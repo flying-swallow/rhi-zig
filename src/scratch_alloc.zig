@@ -192,7 +192,7 @@ pub fn uniform_block_alloc(device: *rhi.Device, scratch: *ScratchAlloc) BlockMem
         const buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{
             .size = scratch.block_size,
             .sharing_mode = .exclusive,
-            .usage = .{ .uniform_buffer_bit = true },
+            .usage = .{ .uniform_buffer = true },
         };
         var vma_info = vma.c.VmaAllocationInfo{};
         var vk_buffer: vma.c.VkBuffer = undefined;

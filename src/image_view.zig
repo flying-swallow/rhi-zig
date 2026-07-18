@@ -60,10 +60,10 @@ pub const ImageView = struct {
         if (rhi.is_target_selected(.vk)) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             const aspect_mask: rhi.vulkan.vk.ImageAspectFlags = switch (desc.aspect) {
-                .color         => .{ .color_bit = true },
-                .depth         => .{ .depth_bit = true },
-                .stencil       => .{ .stencil_bit = true },
-                .depth_stencil => .{ .depth_bit = true, .stencil_bit = true },
+                .color         => .{ .color = true },
+                .depth         => .{ .depth = true },
+                .stencil       => .{ .stencil = true },
+                .depth_stencil => .{ .depth = true, .stencil = true },
             };
             const vk_view_type: rhi.vulkan.vk.ImageViewType = switch (desc.view_type) {
                 .shader_resource_1d,

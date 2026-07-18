@@ -123,12 +123,12 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 .image_color_space = option.color_space,
                 .image_extent = .{ .width = option.width, .height = option.height },
                 .image_array_layers = 1,
-                .image_usage = .{ .color_attachment_bit = true, .transfer_src_bit = true },
+                .image_usage = .{ .color_attachment = true, .transfer_src = true },
                 .image_sharing_mode = .exclusive,
                 .queue_family_index_count = 0,
                 .p_queue_family_indices = null,
-                .pre_transform = .{ .identity_bit_khr = true },
-                .composite_alpha = .{ .opaque_bit_khr = true },
+                .pre_transform = .{ .identity_khr = true },
+                .composite_alpha = .{ .opaque_khr = true },
                 .present_mode = option.present_mode,
                 .clipped = .true,
             };
@@ -167,7 +167,7 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 .format = format,
                 .components = .{ .r = .identity, .g = .identity, .b = .identity, .a = .identity },
                 .subresource_range = .{
-                    .aspect_mask = .{ .color_bit = true },
+                    .aspect_mask = .{ .color = true },
                     .base_mip_level = 0,
                     .level_count = 1,
                     .base_array_layer = 0,
@@ -291,7 +291,7 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 }};
                 const wait_semaphore_info = [_]rhi.vulkan.vk.SemaphoreSubmitInfo{.{
                     .semaphore = self.backend.vk.current_semaphore(),
-                    .stage_mask = .{ .color_attachment_output_bit = true },
+                    .stage_mask = .{ .color_attachment_output = true },
                     .value = 0,
                     .device_index = 0,
                 }};
@@ -300,14 +300,14 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                     .{
                         .semaphore = options.ring_element.backend.vk.semaphore,
                         .value = 0,
-                        .stage_mask = .{ .all_commands_bit = true },
+                        .stage_mask = .{ .all_commands = true },
                         .device_index = 0,
                     },
                     // timeline value marking this frame's GPU completion
                     .{
                         .semaphore = options.timeline.backend.vk.semaphore,
                         .value = timeline_value,
-                        .stage_mask = .{ .all_commands_bit = true },
+                        .stage_mask = .{ .all_commands = true },
                         .device_index = 0,
                     },
                 };

@@ -133,8 +133,8 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                         .flags = vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT | vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
                     };
                     const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ .size = size, .sharing_mode = .exclusive, .usage = .{
-                        .transfer_src_bit = true,
-                        .transfer_dst_bit = true,
+                        .transfer_src = true,
+                        .transfer_dst = true,
                     } };
                     var vma_info = vma.c.VmaAllocationInfo{};
                     var vk_buffer: vma.c.VkBuffer = undefined;
@@ -161,8 +161,8 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             //        .size = size,
             //        .sharing_mode = .exclusive,
             //        .usage = .{
-            //            .transfer_src_bit = true,
-            //            .transfer_dst_bit = true,
+            //            .transfer_src = true,
+            //            .transfer_dst = true,
             //        } };
             //    const vma_info = vma.c.VmaAllocationInfo{};
             //    try rhi.vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateBuffer(device.backend.vk.vma_allocator, &stage_buffer_create_info, &allocation_info, &res.backend.vk.buffer, &res.backend.vk.allocation, &vma_info)));
@@ -248,8 +248,8 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                         .flags = vma.c.VMA_ALLOCATION_CREATE_MAPPED_BIT | vma.c.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
                     };
                     const stage_buffer_create_info = rhi.vulkan.vk.BufferCreateInfo{ .size = config.buffer_size, .sharing_mode = .exclusive, .usage = .{
-                        .transfer_src_bit = true,
-                        .transfer_dst_bit = true,
+                        .transfer_src = true,
+                        .transfer_dst = true,
                     } };
                     var vma_info = vma.c.VmaAllocationInfo{};
                     var vk_buffer: vma.c.VkBuffer = undefined;
@@ -280,7 +280,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
                         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
                         var semaphore_create_info: rhi.vulkan.vk.SemaphoreCreateInfo = .{};
                         var fence_create_info: rhi.vulkan.vk.FenceCreateInfo = .{
-                            .flags =  .{ .signaled_bit = true } ,
+                            .flags =  .{ .signaled = true } ,
                         };
                         var semaphores: [config.max_sets]rhi.vulkan.vk.Semaphore = undefined;
                         var fences: [config.max_sets]rhi.vulkan.vk.Fence = undefined; 
@@ -327,7 +327,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
             const signal_semaphore = [_]rhi.vulkan.vk.SemaphoreSubmitInfo{.{
                 .semaphore = group.backend.vk.semaphores[group.active_set],
                 .value = 0,
-                .stage_mask = .{ .all_transfer_bit = true },
+                .stage_mask = .{ .all_transfer = true },
                 .device_index = 0,
             }};
 
@@ -377,7 +377,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
 
         //    const wait_semaphore_info = [_]rhi.vulkan.vk.SemaphoreSubmitInfo{.{
         //        .semaphore = semaphore.backend.vk.current_semaphore(),
-        //        .stage_mask = .{ .color_attachment_output_bit = true },
+        //        .stage_mask = .{ .color_attachment_output = true },
         //        .value = 0,
         //        .device_index = 0,
         //    }};
@@ -386,7 +386,7 @@ pub fn ResourceLoader(comptime config: ResourceConfig) type {
         //        .semaphore = semaphore.backend.vk.semaphore,
         //        .value = 0,
         //        .stage_mask = .{
-        //            .all_commands_bit = true,
+        //            .all_commands = true,
         //        },
         //        .device_index = 0,
         //    }};

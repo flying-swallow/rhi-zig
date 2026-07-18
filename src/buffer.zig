@@ -68,29 +68,29 @@ pub fn init_general(
     if (rhi.is_target_selected(.vk)) {
         // zig fmt: off
         var usage  = rhi.vulkan.vk.BufferUsageFlags{
-            .shader_device_address_bit = device.adapter.backend.vk.is_buffer_device_address_supported or options.usage.device_address,
-            .transfer_dst_bit = options.usage.transfer_dst,
-            .transfer_src_bit = options.usage.transfer_src,
-            .vertex_buffer_bit = options.usage.vertex_buffer,
-            .index_buffer_bit = options.usage.index_buffer,
-            .uniform_buffer_bit = options.usage.constant_buffer,
-            .indirect_buffer_bit = options.usage.argument_buffer or options.usage.indirect,
-            .storage_buffer_bit = options.usage.scratch_buffer,
-            .shader_binding_table_bit_khr = options.usage.shader_binding_table,
-            .acceleration_structure_storage_bit_khr = options.usage.acceleration_structure_storage,
-            .acceleration_structure_build_input_read_only_bit_khr = options.usage.acceleration_structure_build_input,
-            .micromap_storage_bit_ext = options.usage.micromap_storage,
-            .micromap_build_input_read_only_bit_ext = options.usage.micromap_build_input
+            .shader_device_address = device.adapter.backend.vk.is_buffer_device_address_supported or options.usage.device_address,
+            .transfer_dst = options.usage.transfer_dst,
+            .transfer_src = options.usage.transfer_src,
+            .vertex_buffer = options.usage.vertex_buffer,
+            .index_buffer = options.usage.index_buffer,
+            .uniform_buffer = options.usage.constant_buffer,
+            .indirect_buffer = options.usage.argument_buffer or options.usage.indirect,
+            .storage_buffer = options.usage.scratch_buffer,
+            .shader_binding_table_khr = options.usage.shader_binding_table,
+            .acceleration_structure_storage_khr = options.usage.acceleration_structure_storage,
+            .acceleration_structure_build_input_read_only_khr = options.usage.acceleration_structure_build_input,
+            .micromap_storage_ext = options.usage.micromap_storage,
+            .micromap_build_input_read_only_ext = options.usage.micromap_build_input
         };
         // zig fmt: on
         if (options.stride == 0 or options.stride == 4) {
             if (options.usage.shader_resource)
-                usage.uniform_texel_buffer_bit = true;
+                usage.uniform_texel_buffer = true;
             if (options.usage.shader_resource_storage)
-                usage.storage_texel_buffer_bit = true;
+                usage.storage_texel_buffer = true;
         }
         if (options.stride > 0)
-            usage.storage_buffer_bit = true; // so called SSBO, can be R/W in shaders
+            usage.storage_buffer = true; // so called SSBO, can be R/W in shaders
         var allocation_info: vma.c.VmaAllocationCreateInfo = .{};
         allocation_info.usage = switch (options.buffer_usage) {
             .prefer_device => vma.c.VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
@@ -179,18 +179,18 @@ pub fn deinit(self: *Buffer, device: *rhi.Device) void {
 //    if (rhi.is_target_selected(.vk, renderer)) {
 //
 //        var usage  = rhi.vulkan.vk.BufferUsageFlags{
-//            .shader_device_address_bit = device.adapter.backend.vk.is_buffer_device_address_supported,
-//            .vertex_buffer_bit = options.usage.vertex_buffer,
-//            .index_buffer_bit = options.usage.index_buffer,
-//            .uniform_buffer_bit = options.usage.constant_buffer,
-//            .constant_buffer_bit = options.usage.constant_buffer,
-//            .indirect_buffer_bit = options.usage.argument_buffer,
-//            .storage_buffer_bit = options.usage.scratch_buffer or options.usage.shader_resource_storage,
-//            .shader_binding_table_bit_khr = options.usage.shader_binding_table,
-//            .acceleration_structure_storage_bit_khr = options.usage.acceleration_structure_storage,
-//            .acceleration_structure_build_input_read_only_bit_khr = options.usage.acceleration_structure_build_input,
-//            .micromap_storage_bit_ext = options.usage.micromap_storage,
-//            .micromap_build_input_read_only_bit_ext = options.usage.micromap_build_input
+//            .shader_device_address = device.adapter.backend.vk.is_buffer_device_address_supported,
+//            .vertex_buffer = options.usage.vertex_buffer,
+//            .index_buffer = options.usage.index_buffer,
+//            .uniform_buffer = options.usage.constant_buffer,
+//            .constant_buffer = options.usage.constant_buffer,
+//            .indirect_buffer = options.usage.argument_buffer,
+//            .storage_buffer = options.usage.scratch_buffer or options.usage.shader_resource_storage,
+//            .shader_binding_table_khr = options.usage.shader_binding_table,
+//            .acceleration_structure_storage_khr = options.usage.acceleration_structure_storage,
+//            .acceleration_structure_build_input_read_only_khr = options.usage.acceleration_structure_build_input,
+//            .micromap_storage_ext = options.usage.micromap_storage,
+//            .micromap_build_input_read_only_ext = options.usage.micromap_build_input
 //        };
 //
 //

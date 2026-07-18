@@ -38,7 +38,7 @@ pub fn init(device: *rhi.Device, signaled: bool) !Fence {
     if (rhi.is_target_selected(.vk)) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         var create_info: rhi.vulkan.vk.FenceCreateInfo = .{
-            .flags = if (signaled) .{ .signaled_bit = true } else .{},
+            .flags = if (signaled) .{ .signaled = true } else .{},
         };
         const fence = try dkb.createFence(device.backend.vk.device, &create_info, null);
         return .{ .backend = .{ .vk = .{

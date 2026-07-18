@@ -28,11 +28,7 @@
             .url = "git+https://github.com/flying-swallow/cimgui.zig.git#4a85aa3a7c7bd825ad5e9b54fa531ca0cb70f3e0",
             .hash = "cimgui_zig-1.0.0-2XubkqQ3wgDetMzfITqi4Sjb5Ny8_u5-W-8TZgB8L2_5",
             .lazy = true,
-        },
-        .zml = .{
-            .url = "git+https://github.com/flying-swallow/zml.git#06d3e36bd572fa88a6cc10907ec0ff2d3b3b53e3",
-            .hash = "zml-0.2.0-9dDMRJDYAwBiY9-SnTUJs61E3XuJl2G1Q8VBflEyeb8G",
-        },
+        }
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "deps" },
 }

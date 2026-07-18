@@ -419,7 +419,7 @@ fn initialize_vk(self: *Program, device: *rhi.Device, layout: Layout) !void {
 
     for (layout.bindings) |lb| {
         const flags: rhi.vulkan.vk.DescriptorBindingFlags =
-            if (lb.count > 1) .{ .partially_bound_bit = true } else .{};
+            if (lb.count > 1) .{ .partially_bound = true } else .{};
         try set_bindings[lb.set].append(a, .{
             .binding = lb.binding,
             .descriptor_type = vk_descriptor_type(lb.descriptor_type),
@@ -579,10 +579,10 @@ fn bindPipelineVk(
                 .dst_alpha_blend_factor = c.dst_alpha.to_vk(),
                 .alpha_blend_op = c.alpha_blend_op.to_vk(),
                 .color_write_mask = .{
-                    .r_bit = c.write_mask.r_bit == 1,
-                    .g_bit = c.write_mask.g_bit == 1,
-                    .b_bit = c.write_mask.b_bit == 1,
-                    .a_bit = c.write_mask.a_bit == 1,
+                    .r = c.write_mask.r == 1,
+                    .g = c.write_mask.g == 1,
+                    .b = c.write_mask.b == 1,
+                    .a = c.write_mask.a == 1,
                 },
             };
             color_formats[i] = rhi.vulkan.to_vk_format(c.format orelse .unknown);
@@ -612,8 +612,8 @@ fn bindPipelineVk(
         var stage_count: u32 = 0;
         defer for (0..stage_count) |i| dkb.destroyShaderModule(dev, modules[i], null);
         const stage_table = [_]struct { s: ProgramStage, bit: rhi.vulkan.vk.ShaderStageFlags }{
-            .{ .s = .vertex, .bit = .{ .vertex_bit = true } },
-            .{ .s = .fragment, .bit = .{ .fragment_bit = true } },
+            .{ .s = .vertex, .bit = .{ .vertex = true } },
+            .{ .s = .fragment, .bit = .{ .fragment = true } },
         };
         for (stage_table) |st| {
             const bin = self.shader_bin[@intFromEnum(st.s)];
@@ -680,7 +680,7 @@ fn bindComputePipelineVk(
         defer dkb.destroyShaderModule(dev, module, null);
         var create_info = [1]rhi.vulkan.vk.ComputePipelineCreateInfo{.{
             .stage = .{
-                .stage = .{ .compute_bit = true },
+                .stage = .{ .compute = true },
                 .module = module,
                 .p_name = @ptrCast(bin.entry_point.ptr),
             },
@@ -878,11 +878,11 @@ fn mix(h: u64, v: anytype) u64 {
 
 fn vk_sample_count(n: u32) rhi.vulkan.vk.SampleCountFlags {
     return switch (n) {
-        0, 1 => .{ .@"1_bit" = true },
-        2 => .{ .@"2_bit" = true },
-        4 => .{ .@"4_bit" = true },
-        8 => .{ .@"8_bit" = true },
-        else => .{ .@"1_bit" = true },
+        0, 1 => .{ .@"1" = true },
+        2 => .{ .@"2" = true },
+        4 => .{ .@"4" = true },
+        8 => .{ .@"8" = true },
+        else => .{ .@"1" = true },
     };
 }
 

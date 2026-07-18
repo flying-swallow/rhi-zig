@@ -501,7 +501,7 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator) !std.ArrayList(PhysicalA
             };
             for (0..memory_properties.memory_heap_count) |heap_index| {
                 const memory_heap = &memory_properties.memory_heaps[heap_index];
-                if (memory_heap.flags.device_local_bit == true and physical_adapter.adapter_type != .integrated) {
+                if (memory_heap.flags.device_local == true and physical_adapter.adapter_type != .integrated) {
                     physical_adapter.video_memory_size += memory_heap.size;
                 } else {
                     physical_adapter.system_memory_size += memory_heap.size;
@@ -509,7 +509,7 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator) !std.ArrayList(PhysicalA
             }
             for (0..memory_properties.memory_type_count) |type_index| {
                 const memory_type = &memory_properties.memory_types[type_index];
-                if (memory_type.property_flags.device_local_bit == true and memory_type.property_flags.host_visible_bit == false) {
+                if (memory_type.property_flags.device_local == true and memory_type.property_flags.host_visible == false) {
                     physical_adapter.device_upload_heap_size += memory_properties.memory_heaps[memory_type.heap_index].size;
                 }
             }

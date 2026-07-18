@@ -76,21 +76,21 @@ pub fn init(allocator: std.mem.Allocator, adapter: *rhi.PhysicalAdapter) !Device
             var queue_feature = std.ArrayList([]const u8).initBuffer(&queue_buf);
             var i: usize = 0;
             while (i < queue_family_props.len) : (i += 1) {
-                if (queue_family_props[i].queue_flags.graphics_bit)
+                if (queue_family_props[i].queue_flags.graphics)
                     queue_feature.appendAssumeCapacity("VK_QUEUE_GRAPHICS_BIT");
-                if (queue_family_props[i].queue_flags.compute_bit)
+                if (queue_family_props[i].queue_flags.compute)
                     queue_feature.appendAssumeCapacity("VK_QUEUE_COMPUTE_BIT");
-                if (queue_family_props[i].queue_flags.transfer_bit)
+                if (queue_family_props[i].queue_flags.transfer)
                     queue_feature.appendAssumeCapacity("VK_QUEUE_TRANSFER_BIT");
-                if (queue_family_props[i].queue_flags.sparse_binding_bit)
+                if (queue_family_props[i].queue_flags.sparse_binding)
                     queue_feature.appendAssumeCapacity("VK_QUEUE_SPARSE_BINDING_BIT");
-                if (queue_family_props[i].queue_flags.protected_bit)
+                if (queue_family_props[i].queue_flags.protected)
                     queue_feature.appendAssumeCapacity("VK_QUEUE_PROTECTED_BIT");
-                if (queue_family_props[i].queue_flags.video_decode_bit_khr)
+                if (queue_family_props[i].queue_flags.video_decode_khr)
                     queue_feature.appendAssumeCapacity("VK_QUEUE_VIDEO_DECODE_BIT_KHR");
-                if (queue_family_props[i].queue_flags.video_encode_bit_khr)
+                if (queue_family_props[i].queue_flags.video_encode_khr)
                     queue_feature.appendAssumeCapacity("VK_QUEUE_VIDEO_ENCODE_BIT_KHR");
-                if (queue_family_props[i].queue_flags.optical_flow_bit_nv)
+                if (queue_family_props[i].queue_flags.optical_flow_nv)
                     queue_feature.appendAssumeCapacity("VK_QUEUE_OPTICAL_FLOW_BIT_NV");
                 const features = try std.mem.join(allocator, ",", queue_feature.items);
                 defer allocator.free(features);
@@ -103,9 +103,9 @@ pub fn init(allocator: std.mem.Allocator, adapter: *rhi.PhysicalAdapter) !Device
         const configured = [_]struct {
             required_bits: rhi.vulkan.vk.QueueFlags,
         }{
-            .{ .required_bits = .{ .graphics_bit = true } },
-            .{ .required_bits = .{ .compute_bit = true } },
-            .{ .required_bits = .{ .transfer_bit = true } },
+            .{ .required_bits = .{ .graphics = true } },
+            .{ .required_bits = .{ .compute = true } },
+            .{ .required_bits = .{ .transfer = true } },
         };
         for (configured, 0..) |config, config_idx| {
             var min_queue_flags: u32 = std.math.maxInt(u32);

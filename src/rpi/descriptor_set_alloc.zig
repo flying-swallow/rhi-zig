@@ -205,7 +205,7 @@ pub const Alloc = struct {
         add(&sizes, &n, .acceleration_structure_khr, s.acceleration_structure);
 
         const info: vk.DescriptorPoolCreateInfo = .{
-            .flags = .{ .free_descriptor_set_bit = true },
+            .flags = .{ .free_descriptor_set = true },
             .max_sets = DESCRIPTOR_MAX_SIZE,
             .pool_size_count = n,
             .p_pool_sizes = if (n > 0) &sizes else null,
@@ -350,12 +350,12 @@ pub fn bindRayTracingPipeline(
         rhi.renderer.instance.backend.vk.ikb.getPhysicalDeviceProperties2(device.adapter.backend.vk.physical_device, &props2);
 
         const rt_stages = [_]struct { stage: Program.ProgramStage, bit: vk.ShaderStageFlags }{
-            .{ .stage = .raygen, .bit = .{ .raygen_bit_khr = true } },
-            .{ .stage = .miss, .bit = .{ .miss_bit_khr = true } },
-            .{ .stage = .closest_hit, .bit = .{ .closest_hit_bit_khr = true } },
-            .{ .stage = .any_hit, .bit = .{ .any_hit_bit_khr = true } },
-            .{ .stage = .intersection, .bit = .{ .intersection_bit_khr = true } },
-            .{ .stage = .callable, .bit = .{ .callable_bit_khr = true } },
+            .{ .stage = .raygen, .bit = .{ .raygen_khr = true } },
+            .{ .stage = .miss, .bit = .{ .miss_khr = true } },
+            .{ .stage = .closest_hit, .bit = .{ .closest_hit_khr = true } },
+            .{ .stage = .any_hit, .bit = .{ .any_hit_khr = true } },
+            .{ .stage = .intersection, .bit = .{ .intersection_khr = true } },
+            .{ .stage = .callable, .bit = .{ .callable_khr = true } },
         };
         const RT_STAGE_COUNT = rt_stages.len;
 

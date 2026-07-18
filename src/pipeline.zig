@@ -60,8 +60,8 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const vk_shader = options.shader.backend.vk;
         var stages = [_]rhi.vulkan.vk.PipelineShaderStageCreateInfo{
-            .{ .stage = .{ .vertex_bit = true }, .module = vk_shader.vertex_module, .p_name = "main" },
-            .{ .stage = .{ .fragment_bit = true }, .module = vk_shader.pixel_module, .p_name = "main" },
+            .{ .stage = .{ .vertex = true }, .module = vk_shader.vertex_module, .p_name = "main" },
+            .{ .stage = .{ .fragment = true }, .module = vk_shader.pixel_module, .p_name = "main" },
         };
         var color_blend_attachment = [_]rhi.vulkan.vk.PipelineColorBlendAttachmentState{.{
             .blend_enable = .false,
@@ -71,7 +71,7 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
             .src_alpha_blend_factor = .one,
             .dst_alpha_blend_factor = .zero,
             .alpha_blend_op = .add,
-            .color_write_mask = .{ .r_bit = true, .g_bit = true, .b_bit = true, .a_bit = true },
+            .color_write_mask = .{ .r = true, .g = true, .b = true, .a = true },
         }};
         var dynamic_states = [_]rhi.vulkan.vk.DynamicState{ .viewport, .scissor };
         var dynamic_state: rhi.vulkan.vk.PipelineDynamicStateCreateInfo = .{
@@ -90,7 +90,7 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
             .depth_clamp_enable = .false,
             .rasterizer_discard_enable = .false,
             .polygon_mode = .fill,
-            .cull_mode = .{ .front_bit = false, .back_bit = false },
+            .cull_mode = .{ .front = false, .back = false },
             .front_face = .clockwise,
             .depth_bias_constant_factor = 0,
             .depth_bias_slope_factor = 0,
@@ -100,7 +100,7 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
         };
         var input_assembly: rhi.vulkan.vk.PipelineInputAssemblyStateCreateInfo = .{ .topology = .triangle_list, .primitive_restart_enable = .false };
         var multisample_state: rhi.vulkan.vk.PipelineMultisampleStateCreateInfo = .{
-            .rasterization_samples = .{ .@"1_bit" = true },
+            .rasterization_samples = .{ .@"1" = true },
             .sample_shading_enable = .false,
             .min_sample_shading = 1,
             .p_sample_mask = null,
@@ -128,7 +128,7 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
         var push_ranges: [1]rhi.vulkan.vk.PushConstantRange = undefined;
         var layout_info: rhi.vulkan.vk.PipelineLayoutCreateInfo = .{ .set_layout_count = 0, .push_constant_range_count = 0 };
         if (options.push_constant_size > 0) {
-            push_ranges[0] = .{ .stage_flags = .{ .vertex_bit = true }, .offset = 0, .size = options.push_constant_size };
+            push_ranges[0] = .{ .stage_flags = .{ .vertex = true }, .offset = 0, .size = options.push_constant_size };
             layout_info.push_constant_range_count = 1;
             layout_info.p_push_constant_ranges = &push_ranges;
         }
@@ -247,7 +247,7 @@ pub const PrimativeRestart = enum(u2) {
 
 // https://registry.khronos.org/vulkan/specs/latest/man/html/VkCullModeFlagBits.html
 // https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ne-d3d12-d3d12_cull_mode
-pub const CullMode = struct { front_bit: u1, back_bit: u1 };
+pub const CullMode = struct { front: u1, back: u1 };
 
 pub const FillMode = enum(u1) {
     solid,
@@ -415,10 +415,10 @@ pub const BlendOp = enum(u3) {
 };
 
 pub const WriteMask = struct {
-    r_bit: u1 = 0,
-    g_bit: u1 = 0,
-    b_bit: u1 = 0,
-    a_bit: u1 = 0,
+    r: u1 = 0,
+    g: u1 = 0,
+    b: u1 = 0,
+    a: u1 = 0,
 };
 
 pub const ColorAttachmentDesc = struct {
@@ -522,8 +522,8 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, device: *rhi.Device, d
         .rasterizer_discard_enable = false, // not supported d3d12
         .polygon_mode = rhi.vulkan.vk_fill_mode(desc.rasterization.fill_mode),
         .cull_mode = .{
-            .front_bit = desc.rasterization.cull_mode.front_bit,
-            .back_bit = desc.rasterization.cull_mode.back_bit,
+            .front = desc.rasterization.cull_mode.front,
+            .back = desc.rasterization.cull_mode.back,
         },
         .depth_bias_constant_factor = if (desc.rasterization.depth_bias) |bias| bias.constantelse else 0,
         .depth_bias_slope_factor = if (desc.rasterization.depth_bias) |bias| bias.slope else 0,
@@ -542,7 +542,7 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, device: *rhi.Device, d
             .src_alpha_blend_factor = attachment.src_alpha_blend_factor.to_vk(),
             .dst_alpha_blend_factor = attachment.dst_alpha_blend_factor.to_vk(),
             .alpha_blend_op = attachment.alpha_blend_op.to_vk(),
-            .color_write_mask = .{ .r_bit = attachment.write_mask.r_bit, .g_bit = attachment.write_mask.g_bit, .b_bit = attachment.write_mask.b_bit, .a_bit = attachment.write_mask.a_bit },
+            .color_write_mask = .{ .r = attachment.write_mask.r, .g = attachment.write_mask.g, .b = attachment.write_mask.b, .a = attachment.write_mask.a },
         });
     }
     var pipeline_blend_state: rhi.vulkan.vk.PipelineColorBlendStateCreateInfo = .{ .logic_op_enable = .false, .logic_op = .clear, .blend_constants = .{ 0.0, 0.0, 0.0, 0.0 }, .attachment_count = color_blend_attachments.items.len, .p_attachments = &color_blend_attachments.items };
@@ -556,12 +556,12 @@ pub fn create_graphics_pipeline(alloc: std.mem.Allocator, device: *rhi.Device, d
             return err;
         };
         pipline_shader_stages.append(alloc, .{ .stage = .{
-            .vertex_bit = shader.stage.stage_vertex,
-            .tessellation_control_bit = shader.stage.stage_tesselation_control,
-            .tessellation_evaluation_bit = shader.stage.stage_tesselation_evaluation,
-            .geometry_bit = shader.stage.stage_geometry,
-            .fragment_bit = shader.stage.stage_pixel,
-            .compute_bit = shader.stage.stage_compute,
+            .vertex = shader.stage.stage_vertex,
+            .tessellation_control = shader.stage.stage_tesselation_control,
+            .tessellation_evaluation = shader.stage.stage_tesselation_evaluation,
+            .geometry = shader.stage.stage_geometry,
+            .fragment = shader.stage.stage_pixel,
+            .compute = shader.stage.stage_compute,
         }, .module = module, .p_name = shader.entry_point });
     }
 

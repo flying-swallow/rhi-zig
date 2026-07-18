@@ -57,8 +57,8 @@ pub const CullMode = enum(u8) {
     pub fn to_vk(self: CullMode) rhi.vulkan.vk.CullModeFlags {
         return switch (self) {
             .none => .{},
-            .front => .{ .front_bit = true },
-            .back => .{ .back_bit = true },
+            .front => .{ .front = true },
+            .back => .{ .back = true },
         };
     }
 };
@@ -126,7 +126,7 @@ pub const ColorAttachment = struct {
     src_alpha: BlendFactor = .one,
     dst_alpha: BlendFactor = .zero,
     alpha_blend_op: BlendOp = .add,
-    write_mask: WriteMask = .{ .r_bit = 1, .g_bit = 1, .b_bit = 1, .a_bit = 1 },
+    write_mask: WriteMask = .{ .r = 1, .g = 1, .b = 1, .a = 1 },
 };
 
 pub const MAX_COLOR_ATTACHMENTS = 8;

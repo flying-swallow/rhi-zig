@@ -85,13 +85,13 @@ pub fn add_next(current: anytype, next: anytype) void {
 }
 
 pub fn VKDebugMessengerUtility(messageSeverity: vk.DebugUtilsMessageSeverityFlagsEXT, _: vk.DebugUtilsMessageTypeFlagsEXT, callbackData: ?*const vk.DebugUtilsMessengerCallbackDataEXT, _: ?*anyopaque) callconv(vk.vulkan_call_conv) vk.Bool32 {
-    if (messageSeverity.error_bit_ext) {
+    if (messageSeverity.error_ext) {
         std.debug.print("VK ERROR: {s}\n", .{callbackData.?.p_message.?[0..]});
     }
-    if (messageSeverity.warning_bit_ext) {
+    if (messageSeverity.warning_ext) {
         std.debug.print("VK WARNING: {s}\n", .{callbackData.?.p_message.?[0..]});
     }
-    if (messageSeverity.info_bit_ext) {
+    if (messageSeverity.info_ext) {
         std.debug.print("VK INFO: {s}\n", .{callbackData.?.p_message.?[0..]});
     }
     return .false;
@@ -99,24 +99,24 @@ pub fn VKDebugMessengerUtility(messageSeverity: vk.DebugUtilsMessageSeverityFlag
 
 pub fn VKImageAspectFlagsFromFormat(format: rhi.Format) rhi.vulkan.vk.ImageAspectFlags {
     const props = rhi.format.GetProps(format);
-    var result = rhi.vulkan.vk.ImageAspectFlags{ .stencil_bit = props.is_stencil, .depth_bit = props.is_depth };
+    var result = rhi.vulkan.vk.ImageAspectFlags{ .stencil = props.is_stencil, .depth = props.is_depth };
 
-    if (result.stencil_bit || result.depth_bit) {
+    if (result.stencil || result.depth) {
         return result;
     }
-    result.color_bit = true;
+    result.color = true;
     return result;
 }
 
 pub fn VKImageSpaceFlagsFromFormatAndStencil(format: vk.Format, include_stencil: bool) vk.ImageAspectFlags {
     return switch (format) {
-        .d16_unorm, .x8_d24_unorm_pack32, .d32_sfloat => vk.ImageAspectFlags{ .depth_bit = true },
-        .s8_uint => vk.ImageAspectFlags{ .stencil_bit = true },
+        .d16_unorm, .x8_d24_unorm_pack32, .d32_sfloat => vk.ImageAspectFlags{ .depth = true },
+        .s8_uint => vk.ImageAspectFlags{ .stencil = true },
         .d16_unorm_s8_uint, .d24_unorm_s8_uint, .d32_sfloat_s8_uint => vk.ImageAspectFlags{
-            .depth_bit = true,
-            .stencil_bit = include_stencil,
+            .depth = true,
+            .stencil = include_stencil,
         },
-        else => vk.ImageAspectFlags{ .color_bit = true },
+        else => vk.ImageAspectFlags{ .color = true },
     };
 }
 

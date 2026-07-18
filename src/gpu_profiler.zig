@@ -190,7 +190,7 @@ pub fn GpuProfiler(comptime num_slots: u32) type {
                     const dkb = &device.backend.vk.dkb;
                     dkb.cmdWriteTimestamp2(
                         cmd.backend.vk.cmd,
-                        .{ .top_of_pipe_bit = true },
+                        .{ .top_of_pipe = true },
                         s.backend.vk.pool,
                         begin_idx,
                     );
@@ -220,7 +220,7 @@ pub fn GpuProfiler(comptime num_slots: u32) type {
                     const dkb = &device.backend.vk.dkb;
                     dkb.cmdWriteTimestamp2(
                         cmd.backend.vk.cmd,
-                        .{ .bottom_of_pipe_bit = true },
+                        .{ .bottom_of_pipe = true },
                         s.backend.vk.pool,
                         scope.end_idx,
                     );
@@ -258,7 +258,7 @@ pub fn GpuProfiler(comptime num_slots: u32) type {
                         s.query_count * @sizeOf(u64),
                         @ptrCast(&timestamps),
                         @sizeOf(u64),
-                        .{ .@"64_bit" = true },
+                        .{ .@"64" = true },
                     ) catch continue;
                     if (vk_result == .not_ready) continue;
 

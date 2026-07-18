@@ -67,15 +67,15 @@ pub const ShaderStageFlags = packed struct {
 
     pub fn to_vk(self: ShaderStageFlags) rhi.vulkan.vk.ShaderStageFlags {
         return .{
-            .vertex_bit = self.vertex,
-            .fragment_bit = self.fragment,
-            .compute_bit = self.compute,
-            .raygen_bit_khr = self.raygen,
-            .miss_bit_khr = self.miss,
-            .closest_hit_bit_khr = self.closest_hit,
-            .any_hit_bit_khr = self.any_hit,
-            .intersection_bit_khr = self.intersection,
-            .callable_bit_khr = self.callable,
+            .vertex = self.vertex,
+            .fragment = self.fragment,
+            .compute = self.compute,
+            .raygen_khr = self.raygen,
+            .miss_khr = self.miss,
+            .closest_hit_khr = self.closest_hit,
+            .any_hit_khr = self.any_hit,
+            .intersection_khr = self.intersection,
+            .callable_khr = self.callable,
         };
     }
 };

@@ -132,19 +132,19 @@ fn vk_buffer_address(device: *rhi.Device, buf: *rhi.Buffer, offset: u64) rhi.vul
 
 fn vk_build_flags(flags: BuildFlags) rhi.vulkan.vk.BuildAccelerationStructureFlagsKHR {
     return .{
-        .allow_update_bit_khr = flags.allow_update,
-        .allow_compaction_bit_khr = flags.allow_compaction,
+        .allow_update_khr = flags.allow_update,
+        .allow_compaction_khr = flags.allow_compaction,
         .allow_data_access_khr = flags.allow_data_access,
-        .prefer_fast_trace_bit_khr = flags.prefer_fast_trace,
-        .prefer_fast_build_bit_khr = flags.prefer_fast_build,
-        .low_memory_bit_khr = flags.minimize_memory,
+        .prefer_fast_trace_khr = flags.prefer_fast_trace,
+        .prefer_fast_build_khr = flags.prefer_fast_build,
+        .low_memory_khr = flags.minimize_memory,
     };
 }
 
 fn vk_geometry(device: *rhi.Device, desc: *const GeometryDesc) rhi.vulkan.vk.AccelerationStructureGeometryKHR {
     const geometry_flags = rhi.vulkan.vk.GeometryFlagsKHR{
-        .opaque_bit_khr = desc.flags.opaque_geometry,
-        .no_duplicate_any_hit_invocation_bit_khr = desc.flags.no_duplicate_any_hit_invocation,
+        .opaque_khr = desc.flags.opaque_geometry,
+        .no_duplicate_any_hit_invocation_khr = desc.flags.no_duplicate_any_hit_invocation,
     };
     switch (desc.geometry) {
         .triangles => |tri| {

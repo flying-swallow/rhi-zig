@@ -55,12 +55,12 @@ pub const SmallFloat = struct {
             mantissa = size;
         } else {
             const leading_zeros: u32 = @clz(size);
-            const highest_set_bit: u32 = 31 - leading_zeros;
-            const mantissa_start_bit: u32 = highest_set_bit - mantissa_bits;
-            exp = mantissa_start_bit + 1;
-            mantissa = (size >> @intCast(mantissa_start_bit)) & mantissa_mask;
+            const highest_set: u32 = 31 - leading_zeros;
+            const mantissa_start: u32 = highest_set - mantissa_bits;
+            exp = mantissa_start + 1;
+            mantissa = (size >> @intCast(mantissa_start)) & mantissa_mask;
 
-            const low_bits_mask: u32 = (@as(u32, 1) << @intCast(mantissa_start_bit)) - 1;
+            const low_bits_mask: u32 = (@as(u32, 1) << @intCast(mantissa_start)) - 1;
             if ((size & low_bits_mask) != 0) mantissa += 1;
         }
 
@@ -76,10 +76,10 @@ pub const SmallFloat = struct {
             mantissa = size;
         } else {
             const leading_zeros: u32 = @clz(size);
-            const highest_set_bit: u32 = 31 - leading_zeros;
-            const mantissa_start_bit: u32 = highest_set_bit - mantissa_bits;
-            exp = mantissa_start_bit + 1;
-            mantissa = (size >> @intCast(mantissa_start_bit)) & mantissa_mask;
+            const highest_set: u32 = 31 - leading_zeros;
+            const mantissa_start: u32 = highest_set - mantissa_bits;
+            exp = mantissa_start + 1;
+            mantissa = (size >> @intCast(mantissa_start)) & mantissa_mask;
         }
 
         return (exp << mantissa_bits) | mantissa;

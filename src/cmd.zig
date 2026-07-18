@@ -49,7 +49,7 @@ pub const Pool = struct {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             var cmd_pool_create_info = rhi.vulkan.vk.CommandPoolCreateInfo{
                 .flags = .{
-                    .reset_command_buffer_bit = true,
+                    .reset_command_buffer = true,
                 },
                 .queue_family_index = queue.backend.vk.family_index,
             };
@@ -166,7 +166,7 @@ pub fn CommandRingBuffer(
                             var semaphore_create_info = rhi.vulkan.vk.SemaphoreCreateInfo{ .s_type = .semaphore_create_info };
                             semaphores[pool_index][cmd_index] = try dkb.createSemaphore(device.backend.vk.device, &semaphore_create_info, null);
 
-                            var fence_create_info = rhi.vulkan.vk.FenceCreateInfo{ .s_type = .fence_create_info, .flags = .{ .signaled_bit = true } };
+                            var fence_create_info = rhi.vulkan.vk.FenceCreateInfo{ .s_type = .fence_create_info, .flags = .{ .signaled = true } };
                             fences[pool_index][cmd_index] = try dkb.createFence(
                                 device.backend.vk.device,
                                 &fence_create_info,
@@ -283,7 +283,7 @@ pub fn begin(self: *Cmd, device: *rhi.Device) !void {
         var begin_info = rhi.vulkan.vk.CommandBufferBeginInfo{
             .s_type = .command_buffer_begin_info,
             .flags = .{
-                .one_time_submit_bit = true,
+                .one_time_submit = true,
             },
         };
         try dkb.beginCommandBuffer(self.backend.vk.cmd, &begin_info);
@@ -528,7 +528,7 @@ pub fn clear_attachment_regions(self: *Cmd, device: *rhi.Device, options: struct
                 .layer_count = 1,
             }};
             var clear_att = [_]rhi.vulkan.vk.ClearAttachment{.{
-                .aspect_mask = .{ .color_bit = true },
+                .aspect_mask = .{ .color = true },
                 .color_attachment = 0,
                 .clear_value = .{ .color = .{ .float_32 = r.color } },
             }};
@@ -614,7 +614,7 @@ pub fn draw_indexed(self: *Cmd, device: *rhi.Device, options: struct {
 pub fn set_push_constants(self: *Cmd, device: *rhi.Device, pipeline: *rhi.Pipeline, bytes: []const u8) void {
     if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
-        dkb.cmdPushConstants(self.backend.vk.cmd, pipeline.backend.vk.layout, .{ .vertex_bit = true }, 0, @intCast(bytes.len), bytes.ptr);
+        dkb.cmdPushConstants(self.backend.vk.cmd, pipeline.backend.vk.layout, .{ .vertex = true }, 0, @intCast(bytes.len), bytes.ptr);
         return;
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
@@ -847,7 +847,7 @@ pub fn clear_storage_image(self: *Cmd, device: *rhi.Device, image: *rhi.Image, c
         var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
         const clear_color = rhi.vulkan.vk.ClearColorValue{ .float_32 = color };
         const ranges = [_]rhi.vulkan.vk.ImageSubresourceRange{.{
-            .aspect_mask = .{ .color_bit = true },
+            .aspect_mask = .{ .color = true },
             .base_mip_level = 0,
             .level_count = 1,
             .base_array_layer = 0,
@@ -975,35 +975,35 @@ fn vk_resource_state_layout(state: ResourceState) rhi.vulkan.vk.ImageLayout {
 fn vk_resource_state_access(state: ResourceState) rhi.vulkan.vk.AccessFlags2 {
     var access: rhi.vulkan.vk.AccessFlags2 = .{};
     if (state.general) {
-        access.shader_read_bit = true;
-        access.shader_write_bit = true;
+        access.shader_read = true;
+        access.shader_write = true;
     }
-    if (state.render_target) access.color_attachment_write_bit = true;
+    if (state.render_target) access.color_attachment_write = true;
     if (state.render_target_read) {
-        access.color_attachment_read_bit = true;
-        access.color_attachment_write_bit = true;
+        access.color_attachment_read = true;
+        access.color_attachment_write = true;
     }
     if (state.depth_write) {
-        access.depth_stencil_attachment_read_bit = true;
-        access.depth_stencil_attachment_write_bit = true;
+        access.depth_stencil_attachment_read = true;
+        access.depth_stencil_attachment_write = true;
     }
-    if (state.depth_read) access.depth_stencil_attachment_read_bit = true;
+    if (state.depth_read) access.depth_stencil_attachment_read = true;
     if (state.shader_resource) {
-        access.shader_sampled_read_bit = true;
-        access.shader_read_bit = true;
+        access.shader_sampled_read = true;
+        access.shader_read = true;
     }
-    if (state.storage_read) access.shader_storage_read_bit = true;
-    if (state.storage_write) access.shader_storage_write_bit = true;
-    if (state.copy_src) access.transfer_read_bit = true;
-    if (state.copy_dst) access.transfer_write_bit = true;
-    if (state.indirect_argument) access.indirect_command_read_bit = true;
-    if (state.vertex_buffer) access.vertex_attribute_read_bit = true;
-    if (state.index_buffer) access.index_read_bit = true;
-    if (state.constant_buffer) access.uniform_read_bit = true;
-    if (state.accel_read) access.acceleration_structure_read_bit_khr = true;
-    if (state.accel_write) access.acceleration_structure_write_bit_khr = true;
-    if (state.clear_storage) access.transfer_write_bit = true;
-    if (state.host_read) access.host_read_bit = true;
+    if (state.storage_read) access.shader_storage_read = true;
+    if (state.storage_write) access.shader_storage_write = true;
+    if (state.copy_src) access.transfer_read = true;
+    if (state.copy_dst) access.transfer_write = true;
+    if (state.indirect_argument) access.indirect_command_read = true;
+    if (state.vertex_buffer) access.vertex_attribute_read = true;
+    if (state.index_buffer) access.index_read = true;
+    if (state.constant_buffer) access.uniform_read = true;
+    if (state.accel_read) access.acceleration_structure_read_khr = true;
+    if (state.accel_write) access.acceleration_structure_write_khr = true;
+    if (state.clear_storage) access.transfer_write = true;
+    if (state.host_read) access.host_read = true;
     return access;
 }
 
@@ -1013,26 +1013,26 @@ fn vk_resource_state_stages(state: ResourceState) rhi.vulkan.vk.PipelineStageFla
     if (state.general or state.shader_resource or state.storage_read or
         state.storage_write or state.constant_buffer)
     {
-        flags.vertex_shader_bit = true;
-        flags.fragment_shader_bit = true;
-        flags.compute_shader_bit = true;
-        flags.ray_tracing_shader_bit_khr = true;
+        flags.vertex_shader = true;
+        flags.fragment_shader = true;
+        flags.compute_shader = true;
+        flags.ray_tracing_shader_khr = true;
     }
-    if (state.render_target or state.render_target_read) flags.color_attachment_output_bit = true;
+    if (state.render_target or state.render_target_read) flags.color_attachment_output = true;
     if (state.depth_write or state.depth_read) {
-        flags.early_fragment_tests_bit = true;
-        flags.late_fragment_tests_bit = true;
+        flags.early_fragment_tests = true;
+        flags.late_fragment_tests = true;
     }
     if (state.copy_src or state.copy_dst) {
-        flags.copy_bit = true;
-        flags.blit_bit = true;
-        flags.clear_bit = true;
+        flags.copy = true;
+        flags.blit = true;
+        flags.clear = true;
     }
-    if (state.indirect_argument) flags.draw_indirect_bit = true;
-    if (state.vertex_buffer or state.index_buffer) flags.vertex_input_bit = true;
-    if (state.accel_read or state.accel_write) flags.acceleration_structure_build_bit_khr = true;
-    if (state.clear_storage) flags.clear_bit = true;
-    if (state.host_read) flags.host_bit = true;
+    if (state.indirect_argument) flags.draw_indirect = true;
+    if (state.vertex_buffer or state.index_buffer) flags.vertex_input = true;
+    if (state.accel_read or state.accel_write) flags.acceleration_structure_build_khr = true;
+    if (state.clear_storage) flags.clear = true;
+    if (state.host_read) flags.host = true;
     // UNDEFINED / PRESENT contribute no stages.
     return flags;
 }
@@ -1041,26 +1041,26 @@ fn vk_barrier_stages(hint: BarrierStages, state_fallback: ResourceState) rhi.vul
     if (std.meta.eql(hint, BarrierStages{}))
         return vk_resource_state_stages(state_fallback);
     return .{
-        .vertex_shader_bit = hint.vertex,
-        .fragment_shader_bit = hint.fragment,
-        .compute_shader_bit = hint.compute,
-        .ray_tracing_shader_bit_khr = hint.ray_tracing,
-        .draw_indirect_bit = hint.draw_indirect,
-        .copy_bit = hint.copy,
-        .blit_bit = hint.blit,
-        .clear_bit = hint.clear,
-        .acceleration_structure_build_bit_khr = hint.accel_build,
-        .color_attachment_output_bit = hint.color_attachment,
-        .host_bit = hint.host,
+        .vertex_shader = hint.vertex,
+        .fragment_shader = hint.fragment,
+        .compute_shader = hint.compute,
+        .ray_tracing_shader_khr = hint.ray_tracing,
+        .draw_indirect = hint.draw_indirect,
+        .copy = hint.copy,
+        .blit = hint.blit,
+        .clear = hint.clear,
+        .acceleration_structure_build_khr = hint.accel_build,
+        .color_attachment_output = hint.color_attachment,
+        .host = hint.host,
     };
 }
 
 fn vk_barrier_aspect(aspect: BarrierAspect) rhi.vulkan.vk.ImageAspectFlags {
     return switch (aspect) {
-        .color => .{ .color_bit = true },
-        .depth => .{ .depth_bit = true },
-        .stencil => .{ .stencil_bit = true },
-        .depth_stencil => .{ .depth_bit = true, .stencil_bit = true },
+        .color => .{ .color = true },
+        .depth => .{ .depth = true },
+        .stencil => .{ .stencil = true },
+        .depth_stencil => .{ .depth = true, .stencil = true },
     };
 }
 
