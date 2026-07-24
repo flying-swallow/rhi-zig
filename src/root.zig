@@ -5,6 +5,7 @@
 const std = @import("std");
 
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 
 pub const vma = if (platform_has_api(.vk)) @import("vma") else void;
 pub const format = @import("format.zig");
@@ -35,8 +36,10 @@ pub const index_pool = @import("index_pool.zig");
 pub const timline_deferral = @import("timeline_deferral.zig");
 pub const gpu_ref = @import("gpu_ref.zig");
 /// Dear ImGui rendering layer + the raw dear_bindings C API (for building UI).
-pub const imgui = @import("imgui.zig");
-pub const imgui_c = @import("cimgui");
+/// Both are compiled out of a `headless` build — that config wires no cimgui
+/// module and links no imgui, so referencing these there is a comptime error.
+pub const imgui = if (build_options.headless) void else @import("imgui.zig");
+pub const imgui_c = if (build_options.headless) void else @import("cimgui");
 
 /// Asset loaders. Only the std-only glTF loader is wired up here; the legacy
 /// Wavefront OBJ loader depends on an external math module that is not part of
@@ -89,7 +92,7 @@ pub const ResourceLoader = resource_loader.ResourceLoader;
 pub const Pipeline = pipeline.Pipeline;
 pub const PipelineLayout = pipeline_layout.PipelineLayout;
 pub const Shader = shader.Shader;
-pub const ImGui = imgui.ImguiLayer;
+pub const ImGui = if (build_options.headless) void else imgui.ImguiLayer;
 pub const Semaphore = semaphore.Semaphore;
 pub const Timeline = timeline.Timeline;
 pub const ScratchAlloc = scratch_alloc.ScratchAlloc;
@@ -134,7 +137,7 @@ pub const Backend = enum {
     mtl,
 };
 
-pub const platform_api = blk: {
+pub const platform_api = if (build_options.headless) [_]Backend{} else blk: {
     switch (builtin.os.tag) {
         .windows => break :blk [_]Backend{ .vk, .dx12 },
         .linux => break :blk [_]Backend{.vk},

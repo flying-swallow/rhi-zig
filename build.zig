@@ -50,6 +50,14 @@ pub fn getSlangc(b: *std.Build, rhi_dep: ?*std.Build.Dependency) ?std.Build.Lazy
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+
+    // A null "no GPU backend" build: `platform_api` collapses to `{}`, so
+    // `Image`/`ImageView`/etc. become tiny handle types with no Vulkan/Metal/VMA
+    // or imgui dependency, and none of those C libraries are linked. Lets a
+    // headless tool or server import `rhi` for its type surface (e.g. an asset
+    // record that names `rhi.Image`) without dragging in the renderer. Runtime
+    // GPU calls are unavailable in this mode (they are never analyzed).
+    const headless = b.option(bool, "headless", "Null RHI backend: no Vulkan/Metal/VMA/imgui, type-only") orelse false;
     const zwindows: ?*std.Build.Dependency = if (builtin.target.os.tag == .windows) b.lazyDependency("zwindows", .{
         .zxaudio2_debug_layer = (builtin.mode == .Debug),
         .zd3d12_debug_layer = (builtin.mode == .Debug),
@@ -67,6 +75,13 @@ pub fn build(b: *std.Build) !void {
         } else &.{},
     });
 
+    // Expose the headless flag to the source (`root.zig` keys `platform_api` and
+    // the imgui re-exports off it). Always wired, so a normal (vk/mtl) build just
+    // reads `headless == false`.
+    const rhi_options = b.addOptions();
+    rhi_options.addOption(bool, "headless", headless);
+    engine_module.addImport("build_options", rhi_options.createModule());
+
     const lib = b.addLibrary(.{ .name = "rhi", .linkage = .static, .root_module = engine_module });
 
     // Dear ImGui, consumed as the `cimgui` module (dear_bindings' C API).
@@ -76,20 +91,22 @@ pub fn build(b: *std.Build) !void {
     // imgui_impl_* backends are unused. This also keeps the core library from
     // pulling in cimgui's bundled SDL3/Vulkan/GLFW (and avoids a duplicate SDL3
     // against the one the examples link).
-    if (b.lazyDependency("cimgui_zig", .{
-        .target = target,
-        .optimize = optimize,
-    })) |cimgui_dep| {
-        const cimgui_lib = cimgui_dep.artifact("cimgui");
-        engine_module.linkLibrary(cimgui_lib);
-
-        const cimgui_translate_c = b.addTranslateC(.{
-            .root_source_file = b.path("src/cimgui.h"),
+    if (!headless) {
+        if (b.lazyDependency("cimgui_zig", .{
             .target = target,
             .optimize = optimize,
-        });
-        addIncludePathsToTranslateC(cimgui_translate_c, cimgui_lib);
-        engine_module.addImport("cimgui", cimgui_translate_c.createModule());
+        })) |cimgui_dep| {
+            const cimgui_lib = cimgui_dep.artifact("cimgui");
+            engine_module.linkLibrary(cimgui_lib);
+
+            const cimgui_translate_c = b.addTranslateC(.{
+                .root_source_file = b.path("src/cimgui.h"),
+                .target = target,
+                .optimize = optimize,
+            });
+            addIncludePathsToTranslateC(cimgui_translate_c, cimgui_lib);
+            engine_module.addImport("cimgui", cimgui_translate_c.createModule());
+        }
     }
 
     // The ImGui layer's shader is authored in Slang and compiled to SPIR-V by
@@ -97,7 +114,7 @@ pub fn build(b: *std.Build) !void {
     // module via anonymous imports (`@embedFile("imgui_vert_spv")`). slangc is
     // resolved from an explicit `-Dslangc=` path, otherwise the prebuilt release
     // for this host is fetched lazily.
-    {
+    if (!headless) {
         const slangc = getSlangc(b, null) orelse return;
         const vert_spv = compileSlangSpv(b, slangc, "src/shaders/imgui.slang", "vertexMain", "vertex", "imgui.vert.spv");
         const frag_spv = compileSlangSpv(b, slangc, "src/shaders/imgui.slang", "fragmentMain", "fragment", "imgui.frag.spv");
@@ -110,30 +127,32 @@ pub fn build(b: *std.Build) !void {
     // modules are never imported by the source — and pulling them would require
     // the Vulkan SDK headers and the vulkan-zig generator, neither of which is
     // needed for a Metal build.
-    const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
-    if (!is_apple) {
-        const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
-        if (b.lazyDependency("vma", .{
-            .target = target,
-            .optimize = optimize,
-            .registry = registry,
-        })) |vma_dep| {
-            engine_module.addImport("vma", vma_dep.module("vma"));
-            engine_module.linkLibrary(vma_dep.artifact("vma"));
-        }
+    if (!headless) {
+        const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
+        if (!is_apple) {
+            const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
+            if (b.lazyDependency("vma", .{
+                .target = target,
+                .optimize = optimize,
+                .registry = registry,
+            })) |vma_dep| {
+                engine_module.addImport("vma", vma_dep.module("vma"));
+                engine_module.linkLibrary(vma_dep.artifact("vma"));
+            }
 
-        const vulkan = b.dependency("vulkan", .{
-            .registry = registry,
-        }).module("vulkan-zig");
-        engine_module.addImport("vulkan", vulkan);
-    } else {
-        // Wire in the Metal binding fabric (deps/metal), which links the
-        // Metal/QuartzCore/Foundation frameworks via zig_objc.
-        if (b.lazyDependency("metal", .{
-            .target = target,
-            .optimize = optimize,
-        })) |metal_dep| {
-            engine_module.addImport("metal", metal_dep.module("metal"));
+            const vulkan = b.dependency("vulkan", .{
+                .registry = registry,
+            }).module("vulkan-zig");
+            engine_module.addImport("vulkan", vulkan);
+        } else {
+            // Wire in the Metal binding fabric (deps/metal), which links the
+            // Metal/QuartzCore/Foundation frameworks via zig_objc.
+            if (b.lazyDependency("metal", .{
+                .target = target,
+                .optimize = optimize,
+            })) |metal_dep| {
+                engine_module.addImport("metal", metal_dep.module("metal"));
+            }
         }
     }
 
