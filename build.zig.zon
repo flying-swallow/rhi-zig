@@ -21,14 +21,14 @@
             .hash = "N-V-__8AAAkkoQGn5z1yoNVrwqZfnYmZp8AZ5CJgoHRMQI0c",
         },
         .vulkan = .{
-            .url = "git+https://github.com/Snektron/vulkan-zig.git#057180744c666bb62e20877fe106422784a5e29a",
-            .hash = "vulkan-0.0.0-r7Ytx_6DAwDB1QJAbIew5IzR2PiiAtJENX5kdJHf449X",
+            .url = "git+https://github.com/flying-swallow/vulkan-zig.git#ad7fd34c3aa79e2304ba2cfa12cb96847cc56a00",
+            .hash = "vulkan-0.0.0-r7Ytx_GDAwDkKBl5F3jHNpq4nqPBsBP_HVm953l2T3MR",
         },
         .cimgui_zig = .{
             .url = "git+https://github.com/flying-swallow/cimgui.zig.git#4a85aa3a7c7bd825ad5e9b54fa531ca0cb70f3e0",
             .hash = "cimgui_zig-1.0.0-2XubkqQ3wgDetMzfITqi4Sjb5Ny8_u5-W-8TZgB8L2_5",
             .lazy = true,
-        }
+        },
     },
     .paths = .{ "build.zig", "build.zig.zon", "src", "deps" },
 }
