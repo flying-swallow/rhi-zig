@@ -44,6 +44,9 @@ backend: union {
     mtl: if (rhi.platform_has_api(.mtl)) struct {
         device: rhi.metal.mtl.Device,
     } else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+        adapter: rhi.webgpu.c.WGPUAdapter,
+    } else void,
 },
 name: [256]u8 = std.mem.zeroes([256]u8),
 luid: u64 = 0,
@@ -216,14 +219,14 @@ is_draw_parameters_emulation_enabled: bool = false,
 pub fn default_select_adapter(adapters: []const PhysicalAdapter) usize {
     var selected_adapter_index: usize = 0;
     for (adapters, 0..) |adp, idx| {
-        if (@intFromEnum(adp.adapter_type) > @intFromEnum(adapters[selected_adapter_index].adapter_type))
+        if (@backingInt(adp.adapter_type) > @backingInt(adapters[selected_adapter_index].adapter_type))
             selected_adapter_index = idx;
-        if (@intFromEnum(adp.adapter_type) < @intFromEnum(adapters[selected_adapter_index].adapter_type))
+        if (@backingInt(adp.adapter_type) < @backingInt(adapters[selected_adapter_index].adapter_type))
             continue;
 
-        if (@intFromEnum(adp.preset_level) > @intFromEnum(adapters[selected_adapter_index].preset_level))
+        if (@backingInt(adp.preset_level) > @backingInt(adapters[selected_adapter_index].preset_level))
             selected_adapter_index = idx;
-        if (@intFromEnum(adp.preset_level) < @intFromEnum(adapters[selected_adapter_index].preset_level))
+        if (@backingInt(adp.preset_level) < @backingInt(adapters[selected_adapter_index].preset_level))
             continue;
 
         if (adp.video_memory_size > adapters[selected_adapter_index].video_memory_size)
@@ -527,6 +530,26 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator) !std.ArrayList(PhysicalA
         const name = device.name().utf8();
         const n = @min(name.len, physical_adapter.name.len - 1);
         std.mem.copyForwards(u8, physical_adapter.name[0..n], name[0..n]);
+        try result.append(allocator, physical_adapter);
+    }
+    if (rhi.is_target_selected(.webgpu)) {
+        const adapter = try rhi.webgpu.requestAdapterSync(rhi.renderer.instance.backend.webgpu.instance);
+        var physical_adapter: PhysicalAdapter = .{ .backend = .{ .webgpu = .{ .adapter = adapter } } };
+        var info: rhi.webgpu.c.WGPUAdapterInfo = .{};
+        if (rhi.webgpu.c.wgpuAdapterGetInfo(adapter, &info) == rhi.webgpu.c.WGPUStatus_Success) {
+            defer rhi.webgpu.c.wgpuAdapterInfoFreeMembers(info);
+            const name = rhi.webgpu.slice(info.device);
+            const n = @min(name.len, physical_adapter.name.len - 1);
+            std.mem.copyForwards(u8, physical_adapter.name[0..n], name[0..n]);
+            physical_adapter.device_id = info.deviceID;
+            physical_adapter.adapter_type = switch (info.adapterType) {
+                rhi.webgpu.c.WGPUAdapterType_DiscreteGPU => .discrete,
+                rhi.webgpu.c.WGPUAdapterType_IntegratedGPU => .integrated,
+                rhi.webgpu.c.WGPUAdapterType_CPU => .cpu,
+                else => .other,
+            };
+        }
+        physical_adapter.preset_level = .high;
         try result.append(allocator, physical_adapter);
     }
     return result;

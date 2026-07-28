@@ -14,6 +14,9 @@ backend: union {
     }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    webgpu: rhi.wrapper_platform_type(.webgpu, struct {
+        completed_value: std.atomic.Value(u64) = .init(0),
+    }),
 } = undefined,
 
 pub fn init(device: *rhi.Device) !Timeline {
@@ -39,6 +42,9 @@ pub fn init(device: *rhi.Device) !Timeline {
             .backend = .{ .mtl = .{} },
         };
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.is_target_selected(.webgpu)) {
+        return .{ .signal_value = 0, .backend = .{ .webgpu = .{} } };
+    }
     return error.UnsupportedBackend;
 }
 
@@ -52,6 +58,7 @@ pub fn deinit(self: *Timeline, device: *rhi.Device) void {
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.is_target_selected(.mtl)) {
         return;
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.is_target_selected(.webgpu)) return;
 }
 
 // Reserve the next signal value. Call immediately before the submit that signals it.
@@ -74,6 +81,10 @@ pub fn completed(self: *const Timeline, device: *rhi.Device) !u64 {
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.is_target_selected(.mtl)) {
         return self.signal_value;
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.is_target_selected(.webgpu)) {
+        rhi.renderer.processEvents();
+        return self.signal_value;
+    }
     return error.UnsupportedBackend;
 }
 
@@ -90,6 +101,10 @@ pub fn wait(self: *const Timeline, device: *rhi.Device, value: u64) !void {
         return;
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.is_target_selected(.mtl)) {
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.is_target_selected(.webgpu)) {
+        rhi.renderer.processEvents();
         return;
     }
 }

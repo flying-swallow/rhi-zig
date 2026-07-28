@@ -12,6 +12,7 @@ backend: union {
     }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    webgpu: rhi.wrapper_platform_type(.webgpu, struct {}),
 } = undefined,
 
 pub fn init(device: *rhi.Device) !Semaphore {

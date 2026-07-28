@@ -30,6 +30,10 @@ backend: union {
         device: rhi.metal.mtl.Device,
         queue: rhi.metal.mtl.CommandQueue,
     } else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+        device: rhi.webgpu.c.WGPUDevice,
+        queue: rhi.webgpu.c.WGPUQueue,
+    } else void,
 } = undefined,
 
 fn supports_extension(extensions: [][*:0]const u8, value: []const u8) bool {
@@ -311,7 +315,7 @@ pub fn init(allocator: std.mem.Allocator, adapter: *rhi.PhysicalAdapter) !Device
             };
             // zig fmt: on
             var vma_allocator: vma.c.VmaAllocator = null;
-            try rhi.vulkan.VKWrapResult(@enumFromInt(vma.c.vmaCreateAllocator(&vma_create_info, &vma_allocator)));
+            try rhi.vulkan.VKWrapResult(@fromBackingInt(@intCast(vma.c.vmaCreateAllocator(&vma_create_info, &vma_allocator))));
             break :p vma_allocator;
         };
 
@@ -339,6 +343,22 @@ pub fn init(allocator: std.mem.Allocator, adapter: *rhi.PhysicalAdapter) !Device
             .backend = .{ .mtl = .{ .device = mtl_device, .queue = queue } },
         };
     }
+    if (rhi.is_target_selected(.webgpu)) {
+        const instance = rhi.renderer.instance.backend.webgpu.instance;
+        const device = try rhi.webgpu.requestDeviceSync(instance, adapter.backend.webgpu.adapter);
+        const queue = rhi.webgpu.c.wgpuDeviceGetQueue(device);
+        if (queue == null) {
+            rhi.webgpu.c.wgpuDeviceRelease(device);
+            return error.WebGPUQueueUnavailable;
+        }
+        return .{
+            .graphics_queue = .{ .backend = .{ .webgpu = .{ .queue = queue } } },
+            .compute_queue = null,
+            .transfer_queue = null,
+            .adapter = adapter.*,
+            .backend = .{ .webgpu = .{ .device = device, .queue = queue } },
+        };
+    }
     return error.Unitialized;
 }
 
@@ -352,6 +372,12 @@ pub fn deinit(self: *Device) void {
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.queue.release();
         self.backend.mtl.device.release();
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        rhi.webgpu.c.wgpuQueueRelease(self.backend.webgpu.queue);
+        rhi.webgpu.c.wgpuDeviceRelease(self.backend.webgpu.device);
+        rhi.webgpu.c.wgpuAdapterRelease(self.adapter.backend.webgpu.adapter);
         return;
     }
     unreachable;

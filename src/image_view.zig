@@ -45,6 +45,7 @@ pub const ImageView = struct {
         vk: if (rhi.platform_has_api(.vk)) rhi.vulkan.vk.ImageView else void,
         dx12: rhi.wrapper_platform_type(.dx12, struct {}),
         mtl: if (rhi.platform_has_api(.mtl)) rhi.metal.mtl.Texture else void,
+        webgpu: if (rhi.platform_has_api(.webgpu)) rhi.webgpu.c.WGPUTextureView else void,
     },
     cookie: u64 = 0,
 
@@ -60,30 +61,19 @@ pub const ImageView = struct {
         if (rhi.is_target_selected(.vk)) {
             var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
             const aspect_mask: rhi.vulkan.vk.ImageAspectFlags = switch (desc.aspect) {
-                .color         => .{ .color = true },
-                .depth         => .{ .depth = true },
-                .stencil       => .{ .stencil = true },
+                .color => .{ .color = true },
+                .depth => .{ .depth = true },
+                .stencil => .{ .stencil = true },
                 .depth_stencil => .{ .depth = true, .stencil = true },
             };
             const vk_view_type: rhi.vulkan.vk.ImageViewType = switch (desc.view_type) {
-                .shader_resource_1d,
-                .shader_resource_storage_1d              => .@"1d",
-                .shader_resource_1d_array,
-                .shader_resource_storage_1d_array        => .@"1d_array",
-                .shader_resource_2d,
-                .shader_resource_storage_2d,
-                .color_attachment,
-                .depth_stencil_attachment,
-                .depth_readonly_stencil_attachment,
-                .depth_attachment_stencil_readonly,
-                .depth_stencil_readonly,
-                .shading_rate_attachment                 => .@"2d",
-                .shader_resource_2d_array,
-                .shader_resource_storage_2d_array        => .@"2d_array",
-                .shader_resource_cube                    => .cube,
-                .shader_resource_cube_array              => .cube_array,
-                .shader_resource_3d,
-                .shader_resource_storage_3d              => .@"3d",
+                .shader_resource_1d, .shader_resource_storage_1d => .@"1d",
+                .shader_resource_1d_array, .shader_resource_storage_1d_array => .@"1d_array",
+                .shader_resource_2d, .shader_resource_storage_2d, .color_attachment, .depth_stencil_attachment, .depth_readonly_stencil_attachment, .depth_attachment_stencil_readonly, .depth_stencil_readonly, .shading_rate_attachment => .@"2d",
+                .shader_resource_2d_array, .shader_resource_storage_2d_array => .@"2d_array",
+                .shader_resource_cube => .cube,
+                .shader_resource_cube_array => .cube_array,
+                .shader_resource_3d, .shader_resource_storage_3d => .@"3d",
             };
             const view_create_info: rhi.vulkan.vk.ImageViewCreateInfo = .{
                 .image = image.backend.vk.image,
@@ -116,5 +106,9 @@ pub const ImageView = struct {
         }
         // Metal: no-op — Image owns the MTLTexture.
         if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) return;
+        if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+            if (self.backend.webgpu != null) rhi.webgpu.c.wgpuTextureViewRelease(self.backend.webgpu);
+            return;
+        }
     }
 };

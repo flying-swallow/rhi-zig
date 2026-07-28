@@ -18,6 +18,9 @@ backend: union {
         // render pipeline, so it is carried here and set by `Cmd.bind_pipeline`.
         depth_stencil_state: ?rhi.metal.mtl.DepthStencilState = null,
     } else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+        pipeline: rhi.webgpu.c.WGPURenderPipeline,
+    } else void,
 },
 
 pub fn deinit(self: *Pipeline, device: *rhi.Device) void {

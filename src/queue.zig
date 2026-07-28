@@ -16,6 +16,9 @@ backend: union {
     mtl: if (rhi.platform_has_api(.mtl)) struct {
         queue: rhi.metal.mtl.CommandQueue,
     } else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+        queue: rhi.webgpu.c.WGPUQueue,
+    } else void,
 },
 
 pub fn submit(self: *Queue, device: *rhi.Device, options: struct {
@@ -62,6 +65,10 @@ pub fn wait_queue_idle(self: *Queue, device: *rhi.Device) !void {
         // On Metal, ordering/completion is tracked per command buffer (the
         // command ring waits on the last submitted buffer). A device-wide
         // queue wait is a no-op here.
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        rhi.renderer.processEvents();
         return;
     }
     unreachable;

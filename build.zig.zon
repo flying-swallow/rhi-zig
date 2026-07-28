@@ -7,6 +7,14 @@
         .vma = .{ .path = "deps/vma", .lazy = true },
         .metal = .{ .path = "deps/metal", .lazy = true },
         .slang = .{ .path = "deps/slang", .lazy = true },
+        // Official wgpu-native binary release. The first WebGPU milestone is
+        // intentionally macOS/aarch64-only; additional target archives can be
+        // added lazily without changing the RHI-facing C API.
+        .wgpu_macos_aarch64_release = .{
+            .url = "https://github.com/gfx-rs/wgpu-native/releases/download/v29.0.1.1/wgpu-macos-aarch64-release.zip",
+            .hash = "N-V-__8AAAUNfQJBPHGd3KMhFvl4WLpzHDx9rFkwSf2rFVhr",
+            .lazy = true,
+        },
         // Lazy + resolved only for a Windows target (see build.zig): it pulls a
         // glfw_zig/wayland_zig/toolbox chain that isn't needed off Windows and
         // breaks on newer zig nightlies (toolbox uses the deleted

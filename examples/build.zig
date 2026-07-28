@@ -16,12 +16,14 @@ pub const ShaderStage = struct {
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const enable_webgpu = b.option(bool, "webgpu", "Run supported examples through WebGPU") orelse false;
 
     // The core RHI library. Forwarding target/optimize lets it select the
     // matching backend (Vulkan off Apple, Metal on Apple).
     const rhi_dep = b.dependency("rhi", .{
         .target = target,
         .optimize = optimize,
+        .webgpu = enable_webgpu,
     });
     const rhi_module = rhi_dep.module("rhi");
 
@@ -35,6 +37,8 @@ pub fn build(b: *std.Build) !void {
     }).module("zla");
 
     const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
+    const example_options = b.addOptions();
+    example_options.addOption(bool, "webgpu", enable_webgpu);
 
     // SDL is a lazy dependency so the workspace can build without compiling
     // SDL's transitive build graph.
@@ -99,6 +103,7 @@ pub fn build(b: *std.Build) !void {
                     .{ .name = "rhi", .module = rhi_module },
                     .{ .name = "sdl", .module = sdl_c_module },
                     .{ .name = "zla", .module = zla_module },
+                    .{ .name = "example_build_options", .module = example_options.createModule() },
                 },
             }),
         });

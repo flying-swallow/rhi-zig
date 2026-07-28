@@ -58,6 +58,10 @@ pub fn build(b: *std.Build) !void {
     // record that names `rhi.Image`) without dragging in the renderer. Runtime
     // GPU calls are unavailable in this mode (they are never analyzed).
     const headless = b.option(bool, "headless", "Null RHI backend: no Vulkan/Metal/VMA/imgui, type-only") orelse false;
+    const enable_webgpu = b.option(bool, "webgpu", "Enable the experimental WebGPU backend") orelse false;
+    if (enable_webgpu and (target.result.os.tag != .macos or target.result.cpu.arch != .aarch64)) {
+        return error.WebGPUCurrentlyRequiresMacOSAarch64;
+    }
     const zwindows: ?*std.Build.Dependency = if (builtin.target.os.tag == .windows) b.lazyDependency("zwindows", .{
         .zxaudio2_debug_layer = (builtin.mode == .Debug),
         .zd3d12_debug_layer = (builtin.mode == .Debug),
@@ -80,6 +84,7 @@ pub fn build(b: *std.Build) !void {
     // reads `headless == false`.
     const rhi_options = b.addOptions();
     rhi_options.addOption(bool, "headless", headless);
+    rhi_options.addOption(bool, "webgpu", enable_webgpu);
     engine_module.addImport("build_options", rhi_options.createModule());
 
     const lib = b.addLibrary(.{ .name = "rhi", .linkage = .static, .root_module = engine_module });
@@ -107,6 +112,24 @@ pub fn build(b: *std.Build) !void {
             addIncludePathsToTranslateC(cimgui_translate_c, cimgui_lib);
             engine_module.addImport("cimgui", cimgui_translate_c.createModule());
         }
+    }
+
+    // Keep WebGPU opt-in while the backend is being brought up. Translate the
+    // exact headers shipped with the pinned wgpu-native archive so declarations
+    // and the linked static library cannot drift apart.
+    if (!headless and enable_webgpu) {
+        const wgpu_dep = b.lazyDependency("wgpu_macos_aarch64_release", .{}) orelse return;
+        const wgpu_translate_c = b.addTranslateC(.{
+            .root_source_file = wgpu_dep.path("include/webgpu/wgpu.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        wgpu_translate_c.addIncludePath(wgpu_dep.path("include"));
+        engine_module.addImport("wgpu", wgpu_translate_c.createModule());
+        engine_module.addObjectFile(wgpu_dep.path("lib/libwgpu_native.a"));
+        engine_module.linkFramework("Foundation", .{});
+        engine_module.linkFramework("QuartzCore", .{});
+        engine_module.linkFramework("Metal", .{});
     }
 
     // The ImGui layer's shader is authored in Slang and compiled to SPIR-V by
@@ -144,7 +167,7 @@ pub fn build(b: *std.Build) !void {
                 .registry = registry,
             }).module("vulkan-zig");
             engine_module.addImport("vulkan", vulkan);
-        } else {
+        } else if (!enable_webgpu) {
             // Wire in the Metal binding fabric (deps/metal), which links the
             // Metal/QuartzCore/Foundation frameworks via zig_objc.
             if (b.lazyDependency("metal", .{

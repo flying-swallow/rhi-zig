@@ -17,6 +17,7 @@ pub const Pool = struct {
             void,
         dx12: if (rhi.platform_has_api(.dx12)) void else void,
         mtl: void, // Metal does not use command pools
+        webgpu: void, // WebGPU command encoders are transient
     },
 
     pub fn reset(self: *Self, device: *rhi.Device) !void {
@@ -29,6 +30,7 @@ pub const Pool = struct {
             // Metal has no command pools; command buffers are transient.
             return;
         }
+        if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) return;
         unreachable;
     }
 
@@ -41,6 +43,7 @@ pub const Pool = struct {
         if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
             return;
         }
+        if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) return;
         unreachable;
     }
 
@@ -62,6 +65,9 @@ pub const Pool = struct {
         if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
             return .{ .backend = .{ .mtl = {} } };
         }
+        if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+            return .{ .backend = .{ .webgpu = {} } };
+        }
         return error.UnsupportedBackend;
     }
 };
@@ -77,6 +83,9 @@ pub const CommandRingElement = struct {
         } else void,
         dx12: if (rhi.platform_has_api(.dx12)) void else void,
         mtl: if (rhi.platform_has_api(.mtl)) void else void,
+        webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+            completion: *rhi.webgpu.Completion,
+        } else void,
     },
 
     pub fn wait(self: *Self, device: *rhi.Device) !void {
@@ -91,6 +100,13 @@ pub const CommandRingElement = struct {
             // CAMetalLayer.nextDrawable, which blocks once the maximum number of
             // drawables is in flight. (An MTLSharedEvent could give finer-grained
             // overlap later.)
+            return;
+        }
+        if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+            while (!self.backend.webgpu.completion.load(.acquire)) {
+                rhi.renderer.processEvents();
+                std.atomic.spinLoopHint();
+            }
             return;
         }
         unreachable;
@@ -118,6 +134,9 @@ pub fn CommandRingBuffer(
             } else void,
             dx12: if (rhi.platform_has_api(.dx12)) void else void,
             mtl: if (rhi.platform_has_api(.mtl)) void else void,
+            webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+                completions: [options.pool_count][options.cmd_per_pool]rhi.webgpu.Completion,
+            } else void,
         },
         pub fn advance(self: *Self) void {
             self.pool_index = (self.pool_index + 1) % options.pool_count;
@@ -144,6 +163,20 @@ pub fn CommandRingBuffer(
                     .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds],
                     .pool = &self.pools[self.pool_index],
                     .backend = .{ .mtl = {} },
+                };
+                self.fence_index += 1;
+                self.cmd_index += num_cmds;
+                return result;
+            }
+            if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+                std.debug.assert(num_cmds <= options.cmd_per_pool);
+                std.debug.assert(num_cmds + self.cmd_index <= options.cmd_per_pool);
+                const result = CommandRingElement{
+                    .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds],
+                    .pool = &self.pools[self.pool_index],
+                    .backend = .{ .webgpu = .{
+                        .completion = &self.backend.webgpu.completions[self.pool_index][self.fence_index],
+                    } },
                 };
                 self.fence_index += 1;
                 self.cmd_index += num_cmds;
@@ -191,6 +224,26 @@ pub fn CommandRingBuffer(
                 }
                 return .{ .pool_index = options.pool_count, .cmd_index = 0, .fence_index = 0, .cmds = cmds, .pools = pools, .backend = .{ .mtl = {} } };
             }
+            if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+                var cmds: [options.pool_count][options.cmd_per_pool]rhi.Cmd = undefined;
+                var pools: [options.pool_count]rhi.Pool = undefined;
+                var completions: [options.pool_count][options.cmd_per_pool]rhi.webgpu.Completion = undefined;
+                for (0..options.pool_count) |pool_index| {
+                    pools[pool_index] = try rhi.Pool.init(device, queue);
+                    for (0..options.cmd_per_pool) |cmd_index| {
+                        cmds[pool_index][cmd_index] = try rhi.Cmd.init(device, &pools[pool_index]);
+                        completions[pool_index][cmd_index] = .init(true);
+                    }
+                }
+                return .{
+                    .pool_index = options.pool_count,
+                    .cmd_index = 0,
+                    .fence_index = 0,
+                    .cmds = cmds,
+                    .pools = pools,
+                    .backend = .{ .webgpu = .{ .completions = completions } },
+                };
+            }
 
             unreachable; // should never reach here
         }
@@ -220,6 +273,13 @@ pub fn CommandRingBuffer(
                 }
                 return;
             }
+            if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+                for (0..options.pool_count) |pool_index| {
+                    for (0..options.cmd_per_pool) |cmd_index|
+                        self.cmds[pool_index][cmd_index].deinit(device, &self.pools[pool_index]);
+                }
+                return;
+            }
             unreachable;
         }
     };
@@ -240,6 +300,11 @@ backend: union {
         index_buffer: ?rhi.metal.mtl.Buffer = null,
         index_type: rhi.metal.types.IndexType = .uint16,
     } else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+        encoder: rhi.webgpu.c.WGPUCommandEncoder = null,
+        pass: rhi.webgpu.c.WGPURenderPassEncoder = null,
+        command_buffer: rhi.webgpu.c.WGPUCommandBuffer = null,
+    } else void,
 },
 
 pub fn init(device: *rhi.Device, pool: *Pool) !Cmd {
@@ -259,6 +324,9 @@ pub fn init(device: *rhi.Device, pool: *Pool) !Cmd {
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         return .{ .backend = .{ .mtl = .{ .queue = device.backend.mtl.queue } } };
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        return .{ .backend = .{ .webgpu = .{} } };
+    }
     unreachable;
 }
 
@@ -274,6 +342,13 @@ pub fn deinit(self: *Cmd, device: *rhi.Device, pool: *Pool) void {
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         return;
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        if (self.backend.webgpu.pass != null) rhi.webgpu.c.wgpuRenderPassEncoderRelease(self.backend.webgpu.pass);
+        if (self.backend.webgpu.encoder != null) rhi.webgpu.c.wgpuCommandEncoderRelease(self.backend.webgpu.encoder);
+        if (self.backend.webgpu.command_buffer != null) rhi.webgpu.c.wgpuCommandBufferRelease(self.backend.webgpu.command_buffer);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) return;
     unreachable;
 }
 
@@ -294,6 +369,13 @@ pub fn begin(self: *Cmd, device: *rhi.Device) !void {
         self.backend.mtl.encoder = null;
         return;
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        self.backend.webgpu.encoder = rhi.webgpu.c.wgpuDeviceCreateCommandEncoder(device.backend.webgpu.device, null);
+        if (self.backend.webgpu.encoder == null) return error.WebGPUCommandEncoderFailed;
+        self.backend.webgpu.pass = null;
+        self.backend.webgpu.command_buffer = null;
+        return;
+    }
     unreachable;
 }
 
@@ -305,6 +387,13 @@ pub fn end(self: *Cmd, device: *rhi.Device) !void {
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         // Commit happens in Swapchain.frame_submit.
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        self.backend.webgpu.command_buffer = rhi.webgpu.c.wgpuCommandEncoderFinish(self.backend.webgpu.encoder, null);
+        if (self.backend.webgpu.command_buffer == null) return error.WebGPUCommandBufferFailed;
+        rhi.webgpu.c.wgpuCommandEncoderRelease(self.backend.webgpu.encoder);
+        self.backend.webgpu.encoder = null;
         return;
     }
     unreachable;
@@ -408,7 +497,7 @@ pub fn begin_rendering(self: *Cmd, device: *rhi.Device, options: struct {
         const desc = rhi.metal.mtl.RenderPassDescriptor.renderPassDescriptor();
         for (options.color_attachments, 0..) |att, i| {
             const ca = desc.colorAttachments().object(@intCast(i));
-            ca.setTexture(att.view.mtl);
+            ca.setTexture(att.view.backend.mtl);
             ca.setLoadAction(switch (att.load_op) {
                 .load => .load,
                 .clear => .clear,
@@ -422,7 +511,7 @@ pub fn begin_rendering(self: *Cmd, device: *rhi.Device, options: struct {
         }
         if (options.depth_attachment) |da| {
             const d = desc.depthAttachment();
-            d.setTexture(da.view.mtl);
+            d.setTexture(da.view.backend.mtl);
             d.setLoadAction(switch (da.load_op) {
                 .load => .load,
                 .clear => .clear,
@@ -437,6 +526,36 @@ pub fn begin_rendering(self: *Cmd, device: *rhi.Device, options: struct {
         self.backend.mtl.encoder = self.backend.mtl.cmd.?.renderCommandEncoder(desc) orelse unreachable;
         return;
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        var attachments: [8]rhi.webgpu.c.WGPURenderPassColorAttachment = undefined;
+        for (options.color_attachments, 0..) |att, i| {
+            attachments[i] = .{
+                .view = att.view.backend.webgpu,
+                .depthSlice = rhi.webgpu.c.WGPU_DEPTH_SLICE_UNDEFINED,
+                .loadOp = switch (att.load_op) {
+                    .load => rhi.webgpu.c.WGPULoadOp_Load,
+                    .clear => rhi.webgpu.c.WGPULoadOp_Clear,
+                    .dont_care => rhi.webgpu.c.WGPULoadOp_Clear,
+                },
+                .storeOp = switch (att.store_op) {
+                    .store => rhi.webgpu.c.WGPUStoreOp_Store,
+                    .dont_care => rhi.webgpu.c.WGPUStoreOp_Discard,
+                },
+                .clearValue = .{
+                    .r = att.clear_color[0],
+                    .g = att.clear_color[1],
+                    .b = att.clear_color[2],
+                    .a = att.clear_color[3],
+                },
+            };
+        }
+        var desc: rhi.webgpu.c.WGPURenderPassDescriptor = .{
+            .colorAttachmentCount = options.color_attachments.len,
+            .colorAttachments = &attachments,
+        };
+        self.backend.webgpu.pass = rhi.webgpu.c.wgpuCommandEncoderBeginRenderPass(self.backend.webgpu.encoder, &desc);
+        return;
+    }
     unreachable;
 }
 
@@ -449,6 +568,12 @@ pub fn end_rendering(self: *Cmd, device: *rhi.Device) void {
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.endEncoding();
         self.backend.mtl.encoder = null;
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        rhi.webgpu.c.wgpuRenderPassEncoderEnd(self.backend.webgpu.pass);
+        rhi.webgpu.c.wgpuRenderPassEncoderRelease(self.backend.webgpu.pass);
+        self.backend.webgpu.pass = null;
         return;
     }
     unreachable;
@@ -542,6 +667,7 @@ pub fn clear_attachment_regions(self: *Cmd, device: *rhi.Device, options: struct
         // need solid-color draws (a follow-up).
         return;
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) return;
     unreachable;
 }
 
@@ -1148,20 +1274,25 @@ pub fn resource_barrier(
         dkb.cmdPipelineBarrier2(self.backend.vk.cmd, &dependency_info);
         return;
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        // Resource usages are declared at creation and WebGPU performs the
+        // transitions between passes implicitly.
+        return;
+    }
     unreachable;
 }
 
 // Single-barrier conveniences.
 pub fn memory_barrier(self: *Cmd, device: *rhi.Device, barrier: MemoryBarrier) void {
-    self.resource_barrier(device,.{ .memory = 1, .buffer = 0, .image = 0 }, .{ .memory_barriers = &[_]MemoryBarrier{barrier} });
+    self.resource_barrier(device, .{ .memory = 1, .buffer = 0, .image = 0 }, .{ .memory_barriers = &[_]MemoryBarrier{barrier} });
 }
 
 pub fn buffer_barrier(self: *Cmd, device: *rhi.Device, barrier: BufferBarrier) void {
-    self.resource_barrier(device,.{ .memory = 0, .buffer = 1, .image = 0 }, .{ .buffer_barriers = &[_]BufferBarrier{barrier} });
+    self.resource_barrier(device, .{ .memory = 0, .buffer = 1, .image = 0 }, .{ .buffer_barriers = &[_]BufferBarrier{barrier} });
 }
 
 pub fn image_barrier(self: *Cmd, device: *rhi.Device, barrier: ImageBarrier) void {
-    self.resource_barrier(device,.{ .memory = 0, .buffer = 0, .image = 1 }, .{ .image_barriers = &[_]ImageBarrier{barrier} });
+    self.resource_barrier(device, .{ .memory = 0, .buffer = 0, .image = 1 }, .{ .image_barriers = &[_]ImageBarrier{barrier} });
 }
 
 test {

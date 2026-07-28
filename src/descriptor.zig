@@ -28,6 +28,7 @@ backend: union(rhi.Backend) {
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
     mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) void else void,
 } = undefined,
 
 pub fn isEmpty(self: Descriptor) bool {
@@ -39,7 +40,7 @@ pub fn isEmpty(self: Descriptor) bool {
 /// nudged off 0 so a non-empty descriptor never aliases the empty sentinel.
 fn derive(resource_cookie: u64, kind: rhi.DescriptorType, a: u64, b: u64) u64 {
     if (resource_cookie == 0) return 0;
-    const parts = [_]u64{ resource_cookie, @intFromEnum(kind), a, b };
+    const parts = [_]u64{ resource_cookie, @backingInt(kind), a, b };
     const h = std.hash.Wyhash.hash(0x9e3779b97f4a7c15, std.mem.sliceAsBytes(parts[0..]));
     return if (h == 0) 1 else h;
 }
@@ -50,7 +51,7 @@ fn derive(resource_cookie: u64, kind: rhi.DescriptorType, a: u64, b: u64) u64 {
 // param selects the backend; on unsupported backends the builder yields an
 // empty descriptor.
 
-pub fn uniformBuffer(device: *rhi.Device,buf: *const rhi.Buffer, offset: u64, range: u64) Descriptor {
+pub fn uniformBuffer(device: *rhi.Device, buf: *const rhi.Buffer, offset: u64, range: u64) Descriptor {
     _ = device; // kept for call-site stability; resolution needs only renderer + buf
     if (rhi.is_target_selected(.vk)) {
         return .{
@@ -65,7 +66,7 @@ pub fn uniformBuffer(device: *rhi.Device,buf: *const rhi.Buffer, offset: u64, ra
     return .{};
 }
 
-pub fn storageBuffer(device: *rhi.Device,buf: *const rhi.Buffer, offset: u64, range: u64) Descriptor {
+pub fn storageBuffer(device: *rhi.Device, buf: *const rhi.Buffer, offset: u64, range: u64) Descriptor {
     _ = device;
     if (rhi.is_target_selected(.vk)) {
         return .{
@@ -81,7 +82,7 @@ pub fn storageBuffer(device: *rhi.Device,buf: *const rhi.Buffer, offset: u64, ra
 }
 
 /// Sampled (read-only) image. Bound in `shader_read_only_optimal`.
-pub fn sampledImage(device: *rhi.Device,view: *const rhi.ImageView) Descriptor {
+pub fn sampledImage(device: *rhi.Device, view: *const rhi.ImageView) Descriptor {
     _ = device;
     if (rhi.is_target_selected(.vk)) {
         return .{
@@ -101,7 +102,7 @@ pub fn sampledImage(device: *rhi.Device,view: *const rhi.ImageView) Descriptor {
 }
 
 /// Read/write storage image. Bound in `general`.
-pub fn storageImage(device: *rhi.Device,view: *const rhi.ImageView) Descriptor {
+pub fn storageImage(device: *rhi.Device, view: *const rhi.ImageView) Descriptor {
     _ = device;
     if (rhi.is_target_selected(.vk)) {
         return .{
@@ -120,7 +121,7 @@ pub fn storageImage(device: *rhi.Device,view: *const rhi.ImageView) Descriptor {
     return .{};
 }
 
-pub fn accelerationStructure(device: *rhi.Device,as: *const rhi.AccelerationStructure) Descriptor {
+pub fn accelerationStructure(device: *rhi.Device, as: *const rhi.AccelerationStructure) Descriptor {
     _ = device;
     if (rhi.is_target_selected(.vk)) {
         return .{
@@ -135,7 +136,7 @@ pub fn accelerationStructure(device: *rhi.Device,as: *const rhi.AccelerationStru
     return .{};
 }
 
-pub fn sampler(device: *rhi.Device,s: *const rhi.Sampler) Descriptor {
+pub fn sampler(device: *rhi.Device, s: *const rhi.Sampler) Descriptor {
     _ = device;
     if (rhi.is_target_selected(.vk)) {
         return .{

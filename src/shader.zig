@@ -37,16 +37,21 @@ backend: union(rhi.Backend) {
         fragment_library: ?rhi.metal.mtl.Library = null,
         fragment_function: ?rhi.metal.mtl.Function = null,
     } else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+        vertex_module: ?rhi.webgpu.c.WGPUShaderModule = null,
+        fragment_module: ?rhi.webgpu.c.WGPUShaderModule = null,
+    } else void,
 },
 
 pub fn stages(self: *Shader) Stage {
     return res: switch (self.backend) {
         .dx12 => .stage_none,
+        .webgpu => .stage_none,
         .mtl => |m| {
             var bits: u8 = 0;
-            if (m.vertex_function != null) bits |= @intFromEnum(Stage.stage_vertex);
-            if (m.fragment_function != null) bits |= @intFromEnum(Stage.stage_pixel);
-            break :res @enumFromInt(bits);
+            if (m.vertex_function != null) bits |= @backingInt(Stage.stage_vertex);
+            if (m.fragment_function != null) bits |= @backingInt(Stage.stage_pixel);
+            break :res @fromBackingInt(@intCast(bits));
         },
         .vk => |vk| {
             var res: Stage = .{};
