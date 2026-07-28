@@ -76,6 +76,7 @@ const DescriptorSetSlot = struct {
             alloc: dsa.Alloc = .{},
         }),
         mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+        webgpu: rhi.wrapper_platform_type(.webgpu, struct {}),
     } = undefined,
 
     sampler_max: u16 = 0,
@@ -121,6 +122,7 @@ backend: union {
         layout_count: u32 = 0,
     }),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    webgpu: rhi.wrapper_platform_type(.webgpu, struct {}),
 } = undefined,
 
 // ---------------------------------------------------------------------------
@@ -140,7 +142,7 @@ pub fn initialize(
     // Copy shader binaries + entry points into per-stage slots (all backends).
     errdefer self.free_shader_bins();
     for (modules) |m| {
-        const idx = @intFromEnum(m.stage);
+        const idx = @backingInt(m.stage);
         const buf = try allocator.dupe(u8, m.data);
         errdefer allocator.free(buf);
         const entry = try allocator.allocSentinel(u8, m.entry_point.len, 0);
@@ -387,7 +389,7 @@ fn mtl_load_function(
     dev: rhi.metal.mtl.Device,
     stage: ProgramStage,
 ) !?rhi.metal.mtl.Function {
-    const bin = self.shader_bin[@intFromEnum(stage)];
+    const bin = self.shader_bin[@backingInt(stage)];
     if (bin.buf.len == 0) return null;
     const src = rhi.metal.ns.String.fromUtf8Slice(bin.buf);
     var err: ?rhi.metal.ns.Error = null;
@@ -616,7 +618,7 @@ fn bindPipelineVk(
             .{ .s = .fragment, .bit = .{ .fragment = true } },
         };
         for (stage_table) |st| {
-            const bin = self.shader_bin[@intFromEnum(st.s)];
+            const bin = self.shader_bin[@backingInt(st.s)];
             if (bin.buf.len == 0) continue;
             std.debug.assert(bin.buf.len % @sizeOf(u32) == 0);
             var mod_info: rhi.vulkan.vk.ShaderModuleCreateInfo = .{
@@ -669,7 +671,7 @@ fn bindComputePipelineVk(
     const gop = try self.pipeline.getOrPut(self.allocator, pipeline_hash);
     if (!gop.found_existing) {
         errdefer _ = self.pipeline.remove(pipeline_hash);
-        const bin = self.shader_bin[@intFromEnum(ProgramStage.compute)];
+        const bin = self.shader_bin[@backingInt(ProgramStage.compute)];
         std.debug.assert(bin.buf.len > 0);
         std.debug.assert(bin.buf.len % @sizeOf(u32) == 0);
         var mod_info: rhi.vulkan.vk.ShaderModuleCreateInfo = .{

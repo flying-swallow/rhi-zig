@@ -129,19 +129,23 @@ pub const DescriptorType = enum {
     acceleration_structure,
 };
 
-pub const Selection = enum { default, vk, dx12, mtl };
+pub const Selection = enum { default, vk, dx12, mtl, webgpu };
 
 pub const Backend = enum {
     vk,
     dx12,
     mtl,
+    webgpu,
 };
 
 pub const platform_api = if (build_options.headless) [_]Backend{} else blk: {
     switch (builtin.os.tag) {
         .windows => break :blk [_]Backend{ .vk, .dx12 },
         .linux => break :blk [_]Backend{.vk},
-        .macos => break :blk [_]Backend{.mtl},
+        .macos => if (build_options.webgpu)
+            break :blk [_]Backend{.webgpu}
+        else
+            break :blk [_]Backend{.mtl},
         .ios => break :blk [_]Backend{.mtl},
         else => break :blk [_]Backend{},
     }
@@ -156,6 +160,7 @@ pub fn platform_has_api(comptime target: Backend) bool {
 
 pub const vulkan = if (platform_has_api(.vk)) @import("vulkan.zig") else void;
 pub const metal = if (platform_has_api(.mtl)) @import("metal.zig") else void;
+pub const webgpu = if (platform_has_api(.webgpu)) @import("webgpu.zig") else void;
 
 /// `inline` so that `platform_has_api(api)` (a comptime-known bool) folds into
 /// the caller's `if` condition: on a platform where `api` is unavailable the
@@ -221,10 +226,16 @@ test "metal: swapchain drawable + command buffer" {
     const layer = metal.ca.MetalLayer.layer();
     const handle: WindowHandle = .{ .metal = .{ .layer = @ptrCast(layer.obj.value) } };
 
-    var sc = try Swapchain.init(allocator, &dev, .{ .width = 64, .height = 64, .source = .{ .window_handle = handle } });
+    var sc = try Swapchain.init(allocator, &dev, .{
+        .width = 64,
+        .height = 64,
+        .queue = &dev.graphics_queue,
+        .source = .{ .window_handle = handle },
+    });
     defer sc.deinit(&dev);
 
-    const index = try sc.acquire_next_image(&dev);
+    var index: u32 = undefined;
+    _ = try sc.acquire_next_image(&dev, &index);
     const view = sc.image_view(index);
     try std.testing.expect(view.backend.mtl.obj.value != null);
 

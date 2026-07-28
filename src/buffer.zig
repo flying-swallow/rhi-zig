@@ -31,6 +31,9 @@ backend: union {
     mtl: if (rhi.platform_has_api(.mtl)) struct {
         buffer: rhi.metal.mtl.Buffer,
     } else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+        buffer: rhi.webgpu.c.WGPUBuffer,
+    } else void,
 } = undefined,
 
 //  General buffer initialization function
@@ -125,7 +128,7 @@ pub fn init_general(
         return .{
             .cookie = rhi.next_cookie(),
             .backend = .{ .vk = .{
-                .buffer = @enumFromInt(@intFromPtr(vk_buffer)),
+                .buffer = @fromBackingInt(@intCast(@intFromPtr(vk_buffer))),
                 .allocation = vma_alloc,
             } },
             .mapped_region = if (vma_info.pMappedData != null)
@@ -157,9 +160,7 @@ pub fn isEmpty(self: Buffer) bool {
 
 pub fn deinit(self: *Buffer, device: *rhi.Device) void {
     if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
-        vma.c.vmaDestroyBuffer(
-            device.backend.vk.vma_allocator,
-            @ptrFromInt(@intFromEnum(self.backend.vk.buffer)), self.backend.vk.allocation);
+        vma.c.vmaDestroyBuffer(device.backend.vk.vma_allocator, @ptrFromInt(@backingInt(self.backend.vk.buffer)), self.backend.vk.allocation);
         return;
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {

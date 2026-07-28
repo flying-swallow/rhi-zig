@@ -22,6 +22,7 @@ backend: union(rhi.Backend) {
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
     mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) rhi.webgpu.c.WGPUSampler else void,
 },
 
 /// Build a sampler descriptor referencing this sampler (cookie derived from the
@@ -99,5 +100,8 @@ pub fn deinit(self: *Sampler, device: *rhi.Device) void {
         },
         .dx12 => {},
         .mtl => {},
+        .webgpu => |sampler| if (comptime rhi.platform_has_api(.webgpu)) {
+            rhi.webgpu.c.wgpuSamplerRelease(sampler);
+        },
     }
 }

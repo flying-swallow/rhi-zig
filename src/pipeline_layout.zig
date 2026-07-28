@@ -29,6 +29,9 @@ backend: union {
     vk: rhi.wrapper_platform_type(.vk, struct { layout: rhi.vulkan.vk.PipelineLayout }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    webgpu: rhi.wrapper_platform_type(.webgpu, struct {
+        layout: rhi.webgpu.c.WGPUPipelineLayout,
+    }),
 },
 
 pub fn deinit(self: *PipelineLayout, device: *rhi.Device) void {

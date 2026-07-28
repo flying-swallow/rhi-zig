@@ -24,6 +24,10 @@ backend: union {
     mtl: rhi.wrapper_platform_type(.mtl, struct {
         texture: rhi.metal.mtl.Texture,
     }),
+    webgpu: rhi.wrapper_platform_type(.webgpu, struct {
+        texture: rhi.webgpu.c.WGPUTexture,
+        owned: bool = true,
+    }),
 },
 
 /// An unset / not-yet-created image (cookie 0).
@@ -139,7 +143,7 @@ pub fn init(
         return .{
             .cookie = rhi.next_cookie(),
             .backend = .{ .vk = .{
-                .image = @enumFromInt(@intFromPtr(vk_image)),
+                .image = @fromBackingInt(@intCast(@intFromPtr(vk_image))),
                 .allocation = vma_alloc,
             } },
         };
@@ -167,7 +171,7 @@ pub fn deinit(self: *Image, device: *rhi.Device) void {
         if (self.backend.vk.allocation) |alloc| {
             vma.c.vmaDestroyImage(
                 device.backend.vk.vma_allocator,
-                @ptrFromInt(@intFromEnum(self.backend.vk.image)),
+                @ptrFromInt(@backingInt(self.backend.vk.image)),
                 alloc,
             );
         } else {
@@ -180,6 +184,10 @@ pub fn deinit(self: *Image, device: *rhi.Device) void {
         self.backend.mtl.texture.release();
         return;
     }
+    if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+        if (self.backend.webgpu.owned and self.backend.webgpu.texture != null)
+            rhi.webgpu.c.wgpuTextureRelease(self.backend.webgpu.texture);
+        return;
+    }
     unreachable;
 }
-

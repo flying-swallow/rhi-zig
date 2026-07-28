@@ -105,6 +105,12 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 pixel_format: rhi.metal.types.PixelFormat,
                 current_drawable: ?rhi.metal.ca.MetalDrawable = null,
             } else void,
+            webgpu: if (rhi.platform_has_api(.webgpu)) struct {
+                surface: rhi.webgpu.c.WGPUSurface,
+                format: rhi.webgpu.c.WGPUTextureFormat,
+                current_texture: rhi.webgpu.c.WGPUTexture = null,
+                current_view: rhi.webgpu.c.WGPUTextureView = null,
+            } else void,
         },
 
         fn vk_swapchain_create_info_default(option: struct {
@@ -184,6 +190,9 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
             if (rhi.is_target_selected(.mtl)) {
                 return .{ .backend = .{ .mtl = self.backend.mtl.current_drawable.?.texture() } };
             }
+            if (rhi.is_target_selected(.webgpu)) {
+                return .{ .backend = .{ .webgpu = self.backend.webgpu.current_view } };
+            }
             unreachable;
         }
 
@@ -193,6 +202,12 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
             }
             if (rhi.is_target_selected(.mtl)) {
                 return .{ .backend = .{ .mtl = .{ .texture = self.backend.mtl.current_drawable.?.texture() } } };
+            }
+            if (rhi.is_target_selected(.webgpu)) {
+                return .{ .backend = .{ .webgpu = .{
+                    .texture = self.backend.webgpu.current_texture,
+                    .owned = false,
+                } } };
             }
             unreachable;
         }
@@ -215,6 +230,17 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 return;
             }
             if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
+                return;
+            }
+            if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+                if (self.backend.webgpu.current_view != null)
+                    rhi.webgpu.c.wgpuTextureViewRelease(self.backend.webgpu.current_view);
+                if (self.backend.webgpu.current_texture != null)
+                    rhi.webgpu.c.wgpuTextureRelease(self.backend.webgpu.current_texture);
+                if (self.backend.webgpu.surface != null) {
+                    rhi.webgpu.c.wgpuSurfaceUnconfigure(self.backend.webgpu.surface);
+                    rhi.webgpu.c.wgpuSurfaceRelease(self.backend.webgpu.surface);
+                }
                 return;
             }
             unreachable;
@@ -248,6 +274,28 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                     return error.MetalNoDrawable;
                 out_index.* = 0;
                 return .ok;
+            }
+            if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+                var surface_texture: rhi.webgpu.c.WGPUSurfaceTexture = .{};
+                rhi.webgpu.c.wgpuSurfaceGetCurrentTexture(self.backend.webgpu.surface, &surface_texture);
+                switch (surface_texture.status) {
+                    rhi.webgpu.c.WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal => {},
+                    rhi.webgpu.c.WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal => {},
+                    rhi.webgpu.c.WGPUSurfaceGetCurrentTextureStatus_Outdated,
+                    rhi.webgpu.c.WGPUSurfaceGetCurrentTextureStatus_Lost,
+                    rhi.webgpu.c.WGPUSurfaceGetCurrentTextureStatus_Occluded,
+                    => return .out_of_date,
+                    rhi.webgpu.c.WGPUSurfaceGetCurrentTextureStatus_Timeout => return .suboptimal,
+                    else => {
+                        std.log.err("WebGPU surface acquire status: {d}", .{surface_texture.status});
+                        return error.WebGPUSurfaceAcquireFailed;
+                    },
+                }
+                self.backend.webgpu.current_texture = surface_texture.texture;
+                self.backend.webgpu.current_view = rhi.webgpu.c.wgpuTextureCreateView(surface_texture.texture, null);
+                if (self.backend.webgpu.current_view == null) return error.WebGPUTextureViewFailed;
+                out_index.* = 0;
+                return if (surface_texture.status == rhi.webgpu.c.WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) .suboptimal else .ok;
             }
             unreachable;
         }
@@ -335,10 +383,88 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 self.backend.mtl.current_drawable = null;
                 return .ok;
             }
+            if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+                const command_buffer = options.cmd.backend.webgpu.command_buffer;
+                if (command_buffer == null) return error.WebGPUCommandBufferMissing;
+                const commands = [_]rhi.webgpu.c.WGPUCommandBuffer{command_buffer};
+                rhi.webgpu.c.wgpuQueueSubmit(queue.backend.webgpu.queue, commands.len, &commands);
+                rhi.webgpu.trackSubmitted(
+                    queue.backend.webgpu.queue,
+                    options.ring_element.backend.webgpu.completion,
+                );
+                options.cmd.backend.webgpu.command_buffer = null;
+                rhi.webgpu.c.wgpuCommandBufferRelease(command_buffer);
+                _ = options.timeline.next();
+                if (rhi.webgpu.c.wgpuSurfacePresent(self.backend.webgpu.surface) != rhi.webgpu.c.WGPUStatus_Success)
+                    return .out_of_date;
+                rhi.webgpu.c.wgpuTextureViewRelease(self.backend.webgpu.current_view);
+                rhi.webgpu.c.wgpuTextureRelease(self.backend.webgpu.current_texture);
+                self.backend.webgpu.current_view = null;
+                self.backend.webgpu.current_texture = null;
+                return .ok;
+            }
             unreachable;
         }
 
         pub fn init(allocator: std.mem.Allocator, device: *rhi.Device, desc: Desc) !Self {
+            if ((comptime rhi.platform_has_api(.webgpu)) and rhi.renderer.instance.backend == .webgpu) {
+                var surface: rhi.webgpu.c.WGPUSurface = null;
+                switch (desc.source) {
+                    .window_handle => |handle| {
+                        var source: rhi.webgpu.c.WGPUSurfaceSourceMetalLayer = .{
+                            .chain = .{ .sType = rhi.webgpu.c.WGPUSType_SurfaceSourceMetalLayer },
+                            .layer = handle.metal.layer,
+                        };
+                        var surface_desc: rhi.webgpu.c.WGPUSurfaceDescriptor = .{
+                            .nextInChain = &source.chain,
+                        };
+                        surface = rhi.webgpu.c.wgpuInstanceCreateSurface(
+                            rhi.renderer.instance.backend.webgpu.instance,
+                            &surface_desc,
+                        );
+                    },
+                    .old_swapchain => |old| {
+                        surface = old.backend.webgpu.surface;
+                        old.backend.webgpu.surface = null;
+                    },
+                }
+                if (surface == null) return error.WebGPUSurfaceCreationFailed;
+                errdefer rhi.webgpu.c.wgpuSurfaceRelease(surface);
+                var capabilities: rhi.webgpu.c.WGPUSurfaceCapabilities = .{};
+                if (rhi.webgpu.c.wgpuSurfaceGetCapabilities(
+                    surface,
+                    device.adapter.backend.webgpu.adapter,
+                    &capabilities,
+                ) != rhi.webgpu.c.WGPUStatus_Success or capabilities.formatCount == 0) {
+                    return error.WebGPUSurfaceCapabilitiesFailed;
+                }
+                defer rhi.webgpu.c.wgpuSurfaceCapabilitiesFreeMembers(capabilities);
+                const format = capabilities.formats[0];
+                var config: rhi.webgpu.c.WGPUSurfaceConfiguration = .{
+                    .device = device.backend.webgpu.device,
+                    .format = format,
+                    .usage = rhi.webgpu.c.WGPUTextureUsage_RenderAttachment,
+                    .width = desc.width,
+                    .height = desc.height,
+                    .alphaMode = if (capabilities.alphaModeCount > 0)
+                        capabilities.alphaModes[0]
+                    else
+                        rhi.webgpu.c.WGPUCompositeAlphaMode_Auto,
+                    .presentMode = if (capabilities.presentModeCount > 0)
+                        capabilities.presentModes[0]
+                    else
+                        rhi.webgpu.c.WGPUPresentMode_Fifo,
+                };
+                rhi.webgpu.c.wgpuSurfaceConfigure(surface, &config);
+                return .{
+                    .allocator = allocator,
+                    .present_queue = desc.queue,
+                    .image_count = 1,
+                    .width = desc.width,
+                    .height = desc.height,
+                    .backend = .{ .webgpu = .{ .surface = surface, .format = format } },
+                };
+            }
             if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
                 const layer = switch (desc.source) {
                     .window_handle => |handle| rhi.metal.ca.MetalLayer.fromId(@ptrCast(@alignCast(handle.metal.layer))) orelse return error.MetalNoLayer,

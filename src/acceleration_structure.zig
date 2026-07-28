@@ -117,6 +117,7 @@ backend: union {
     } else void,
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    webgpu: rhi.wrapper_platform_type(.webgpu, struct {}),
 } = undefined,
 
 /// An unset / not-yet-created acceleration structure (cookie 0).

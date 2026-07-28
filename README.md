@@ -34,10 +34,12 @@ handful of asset loaders. Its RHI design is ported from the Amnesia/HPL2 engine
 | ------- | --------------- | ------------------------------------------------------------------ |
 | Vulkan  | Windows, Linux  | Primary backend; most complete.                                    |
 | Metal   | macOS, iOS      | Supported. Examples `00`–`02` are ported; on Metal the `rpi` layer covers the render-pipeline cache + push constants only. |
+| WebGPU  | macOS arm64     | Experimental groundwork: native `00_clear` through wgpu-native, enabled explicitly with `-Dwebgpu=true`. |
 | D3D12   | Windows         | Declared in the backend enum but **not yet implemented** (`src/d3d12.zig` is a stub). |
 
 The active backends per platform are chosen in `src/root.zig` (`platform_api`): Windows
-`{ vk, dx12 }`, Linux `{ vk }`, macOS/iOS `{ mtl }`.
+`{ vk, dx12 }`, Linux `{ vk }`, macOS/iOS `{ mtl }`. Enabling WebGPU currently selects
+`{ webgpu }` on macOS arm64 so its native dependency remains isolated from Metal builds.
 
 ## Requirements
 
@@ -64,6 +66,7 @@ zig build test
 
 Useful build options:
 
+- `-Dwebgpu=true` — opt into the experimental macOS-arm64 WebGPU backend.
 - `-Dslangc=/path/to/slangc` — use an existing `slangc` (e.g. from the Vulkan SDK) instead of
   downloading the prebuilt Slang.
 - `-Dzd3d12_gbv` — enable D3D12 GPU-Based Validation (Windows).
@@ -80,7 +83,7 @@ zig build 00_clear      # or 01_shader, 02_mesh, 03_imgui, 04_svt
 
 | Step        | Source          | Demonstrates                                                             | Backends       |
 | ----------- | --------------- | ----------------------------------------------------------------------- | -------------- |
-| `00_clear`  | `00Clear.zig`   | Minimal swapchain clear with image barriers.                            | Vulkan, Metal  |
+| `00_clear`  | `00Clear.zig`   | Minimal swapchain clear with image barriers.                            | Vulkan, Metal, WebGPU |
 | `01_shader` | `01Shader.zig`  | Fullscreen shader (Mandelbrot); Slang → SPIR-V/MSL per backend.         | Vulkan, Metal  |
 | `02_mesh`   | `02Mesh.zig`    | Mesh rendering with push constants (`bunny.obj`).                       | Vulkan, Metal  |
 | `03_imgui`  | `03Imgui.zig`   | Dear ImGui UI drawn through `rhi.imgui`.                                | Vulkan         |

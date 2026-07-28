@@ -3,6 +3,7 @@
 
 const builtin = @import("builtin");
 const std = @import("std");
+const example_build_options = @import("example_build_options");
 const rhi = @import("rhi");
 const sdl_app = @import("./sdl_app.zig");
 
@@ -155,7 +156,9 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
     errdefer sdl_app.sdl.SDL_DestroyWindow(window);
 
     const window_handle = try sdl_app.sdl_window_handle_to_rhi_window_handle(window.?);
-    try rhi.Renderer.init(app_context.gpa, if (is_apple)
+    try rhi.Renderer.init(app_context.gpa, if (example_build_options.webgpu)
+        .{ .webgpu = .{} }
+    else if (is_apple)
         .{ .mtl = .{} }
     else
         .{ .vk = .{ .app_name = "GraphicsKernel", .enable_validation_layer = true } });

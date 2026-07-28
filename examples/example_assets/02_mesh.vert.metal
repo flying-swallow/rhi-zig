@@ -104,4 +104,3 @@ struct PushConsts_0
     (&o_0)->position_0 = clip_0;
     return o_0;
 }
-

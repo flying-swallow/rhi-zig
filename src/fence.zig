@@ -12,6 +12,7 @@ backend: union {
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
     mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    webgpu: if (rhi.platform_has_api(.webgpu)) void else void,
 } = undefined,
 
 pub const FenceStatus = enum {

@@ -21,6 +21,7 @@ const DescriptorSetSlot = struct {
         } else void,
         dx12: if (rhi.platform_has_api(.dx12)) struct {} else void,
         mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+        webgpu: if (rhi.platform_has_api(.webgpu)) struct {} else void,
     },
 };
 
