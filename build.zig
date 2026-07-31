@@ -58,11 +58,7 @@ pub fn build(b: *std.Build) !void {
     // record that names `rhi.Image`) without dragging in the renderer. Runtime
     // GPU calls are unavailable in this mode (they are never analyzed).
     const headless = b.option(bool, "headless", "Null RHI backend: no Vulkan/Metal/VMA/imgui, type-only") orelse false;
-    const zwindows: ?*std.Build.Dependency = if (builtin.target.os.tag == .windows) b.lazyDependency("zwindows", .{
-        .zxaudio2_debug_layer = (builtin.mode == .debug),
-        .zd3d12_debug_layer = (builtin.mode == .debug),
-        .zd3d12_gbv = b.option(bool, "zd3d12_gbv", "Enable GPU-Based Validation") orelse false,
-    }) else null;
+    const zwindows: ?*std.Build.Dependency = if (builtin.target.os.tag == .windows) b.lazyDependency("zwindows", .{}) else null;
 
     const engine_module = b.addModule("rhi", .{
         .root_source_file = b.path("src/root.zig"),
@@ -70,8 +66,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .imports = if (zwindows) |zw| &.{
             .{ .name = "zwindows", .module = zw.module("zwindows") },
-            .{ .name = "zd3d12", .module = zw.module("zd3d12") },
-            .{ .name = "zxaudio2", .module = zw.module("zxaudio2") },
         } else &.{},
     });
 
@@ -130,11 +124,12 @@ pub fn build(b: *std.Build) !void {
     if (!headless) {
         const is_apple = target.result.os.tag == .macos or target.result.os.tag == .ios;
         if (!is_apple) {
-            const registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml");
+            const vulkan_headers = b.dependency("vulkan_headers", .{});
+            const registry = vulkan_headers.path("registry/vk.xml");
             if (b.lazyDependency("vma", .{
                 .target = target,
                 .optimize = optimize,
-                .registry = registry,
+                .registry = vulkan_headers.path(""),
             })) |vma_dep| {
                 engine_module.addImport("vma", vma_dep.module("vma"));
                 engine_module.linkLibrary(vma_dep.artifact("vma"));
@@ -156,19 +151,7 @@ pub fn build(b: *std.Build) !void {
         }
     }
 
-    if (builtin.target.os.tag == .windows) {
-        // lazyImport (not @import): zwindows is a lazy dep now, so its build
-        // helpers must be imported the same way as the lazy `slang` package —
-        // a plain @import would be comptime-resolved even on non-Windows and
-        // fail because the dep isn't fetched there.
-        if (b.lazyImport(@This(), "zwindows")) |zwindow| {
-            if (zwindows) |zw| {
-                const activate_zwindows = zwindow.activateSdk(b, zw);
-                lib.step.dependOn(activate_zwindows);
-                zwindow.install_d3d12(&lib.step, zw, .bin);
-            }
-        }
-    }
+
     // Install vendored binaries
 
     b.installArtifact(lib);

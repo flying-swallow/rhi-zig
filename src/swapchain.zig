@@ -4,6 +4,7 @@
 const rhi = @import("root.zig");
 const builtin = @import("builtin");
 const std = @import("std");
+const zwindows = if (builtin.os.tag == .windows) @import("zwindows") else void;
 
 pub const SwapchainFormat = enum { bt709_g10_16bit, bt709_g22_8bit, bt709_g22_10bit, bt2020_g2084_10bit };
 
@@ -395,6 +396,18 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                                         .surface = @ptrCast(val.surface),
                                     };
                                     break :p try ikb.createWaylandSurfaceKHR(rhi.renderer.instance.backend.vk.instance, &info, null);
+                                },
+                            }
+                        } else if (builtin.os.tag == .windows) p: {
+                            switch (handle) {
+                                .windows => |val| {
+                                    const raw_hinst: ?*anyopaque = if (val.hinstance) |h| h else @ptrCast(zwindows.GetModuleHandleA(null));
+                                    const info: rhi.vulkan.vk.Win32SurfaceCreateInfoKHR = .{
+                                        .s_type = .win32_surface_create_info_khr,
+                                        .hinstance = @ptrCast(raw_hinst.?),
+                                        .hwnd = @ptrCast(val.hwnd.?),
+                                    };
+                                    break :p try ikb.createWin32SurfaceKHR(rhi.renderer.instance.backend.vk.instance, &info, null);
                                 },
                             }
                         } else {

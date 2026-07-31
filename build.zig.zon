@@ -12,8 +12,8 @@
         // breaks on newer zig nightlies (toolbox uses the deleted
         // std.Uri.getHostAlloc).
         .zwindows = .{
-            .url = "git+https://github.com/flying-swallow/zwindows.git#a0bcb1ddf17fc4d458dff849a895644931a921df",
-            .hash = "zwindows-0.3.0-dev-xMZ1u0OlEgBe5N8_vygzx_IOFwrKSJRkQvtjOyU4Qg60",
+            .url = "git+https://github.com/flying-swallow/zwindows.git#e18dccfd71a5257fb39bb229029af1f5ceb6a9fe",
+            .hash = "zwindows-0.3.0-dev-xMZ1u6H2IQCDBcoXjNRz3IycpYwrQ5XD8vDSZsEEmTT8",
             .lazy = true,
         },
         .vulkan_headers = .{

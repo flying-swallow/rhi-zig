@@ -6,6 +6,7 @@ const vulkan = @import("root.zig").vulkan;
 const std = @import("std");
 const assert = std.debug.assert;
 const builtin = @import("builtin");
+const zwindows = if (builtin.os.tag == .windows) @import("zwindows") else void;
 
 pub const Renderer = @This();
 
@@ -72,12 +73,14 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
     switch (impl) {
         .vk => |opt| {
           if (comptime rhi.platform_has_api(.vk)) {
-            var dynLib = switch (builtin.os.tag) {
+            const vkGetInstanceProcAddr: rhi.vulkan.vk.PfnGetInstanceProcAddr = switch (builtin.os.tag) {
                 .windows => p: {
-                    break :p std.DynLib.open("vulkan-1.dll") catch |err| {
-                        std.debug.print("Failed to load vulkan-1.dll: {s}\n", .{err});
-                        return err;
+                    const handle = zwindows.LoadLibraryA("vulkan-1.dll") orelse {
+                        std.debug.print("Failed to load vulkan-1.dll\n", .{});
+                        return error.VulkanLibraryNotFound;
                     };
+                    const proc = zwindows.GetProcAddress(handle, "vkGetInstanceProcAddr") orelse return error.VulkanSymbolNotFound;
+                    break :p @ptrCast(proc);
                 },
                 .linux => p: {
                     const libs = [_][]const u8{
@@ -86,8 +89,9 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
                     };
                     for (libs) |lib| {
                         std.debug.print("Trying to load Vulkan library: {s}\n", .{lib});
-                        const handle = std.DynLib.open(lib) catch continue;
-                        break :p handle;
+                        var handle = std.DynLib.open(lib) catch continue;
+                        const proc = handle.lookup(rhi.vulkan.vk.PfnGetInstanceProcAddr, "vkGetInstanceProcAddr") orelse continue;
+                        break :p proc;
                     }
                     return error.VulkanLibraryNotFound;
                 },
@@ -104,8 +108,9 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
                     for (libs) |l| {
                         if (l) |ll| {
                             std.debug.print("Trying to load Vulkan library: {s}\n", .{ll});
-                            const handle = std.DynLib.open(ll) catch continue;
-                            break :p handle;
+                            var handle = std.DynLib.open(ll) catch continue;
+                            const proc = handle.lookup(rhi.vulkan.vk.PfnGetInstanceProcAddr, "vkGetInstanceProcAddr") orelse continue;
+                            break :p proc;
                         }
                     }
                     return error.VulkanLibraryNotFound;
@@ -113,8 +118,7 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
                 else => @panic("Unsupported OS"),
             };
 
-            const vkGetInstaceProcAddress = dynLib.lookup(rhi.vulkan.vk.PfnGetInstanceProcAddr, "vkGetInstanceProcAddr");
-            const loader = rhi.vulkan.vk.BaseWrapper.load(vkGetInstaceProcAddress.?);
+            const loader = rhi.vulkan.vk.BaseWrapper.load(vkGetInstanceProcAddr);
 
             var app_info: rhi.vulkan.vk.ApplicationInfo = .{ .s_type = .application_info, .p_application_name = opt.app_name, .application_version = @bitCast(rhi.vulkan.vk.makeApiVersion(0, 0, 0, 1)), .engine_version = @bitCast(rhi.vulkan.vk.makeApiVersion(0, 0, 0, 1)), .api_version = @bitCast(rhi.vulkan.vk.API_VERSION_1_3) };
 
