@@ -59,8 +59,8 @@ pub fn build(b: *std.Build) !void {
     // GPU calls are unavailable in this mode (they are never analyzed).
     const headless = b.option(bool, "headless", "Null RHI backend: no Vulkan/Metal/VMA/imgui, type-only") orelse false;
     const zwindows: ?*std.Build.Dependency = if (builtin.target.os.tag == .windows) b.lazyDependency("zwindows", .{
-        .zxaudio2_debug_layer = (builtin.mode == .Debug),
-        .zd3d12_debug_layer = (builtin.mode == .Debug),
+        .zxaudio2_debug_layer = (builtin.mode == .debug),
+        .zd3d12_debug_layer = (builtin.mode == .debug),
         .zd3d12_gbv = b.option(bool, "zd3d12_gbv", "Enable GPU-Based Validation") orelse false,
     }) else null;
 
