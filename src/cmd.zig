@@ -17,6 +17,8 @@ pub const Pool = struct {
             void,
         dx12: if (rhi.platform_has_api(.dx12)) void else void,
         mtl: void, // Metal does not use command pools
+        wgpu: void, // Neither does WebGPU: encoders are created per frame
+        webgl: void, // Nor WebGL2, which has no command object at all
     },
 
     pub fn reset(self: *Self, device: *rhi.Device) !void {
@@ -29,6 +31,15 @@ pub const Pool = struct {
             // Metal has no command pools; command buffers are transient.
             return;
         }
+        if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+            // Same on WebGPU: a GPUCommandEncoder is created and consumed within
+            // a frame, so there is no pool storage to reset.
+            return;
+        }
+        if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+            // The recorder is reset by `Cmd.begin`, which owns it.
+            return;
+        }
         unreachable;
     }
 
@@ -39,6 +50,12 @@ pub const Pool = struct {
             return;
         }
         if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
+            return;
+        }
+        if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+            return;
+        }
+        if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
             return;
         }
         unreachable;
@@ -62,6 +79,12 @@ pub const Pool = struct {
         if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
             return .{ .backend = .{ .mtl = {} } };
         }
+        if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+            return .{ .backend = .{ .wgpu = {} } };
+        }
+        if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+            return .{ .backend = .{ .webgl = {} } };
+        }
         return error.UnsupportedBackend;
     }
 };
@@ -77,6 +100,8 @@ pub const CommandRingElement = struct {
         } else void,
         dx12: if (rhi.platform_has_api(.dx12)) void else void,
         mtl: if (rhi.platform_has_api(.mtl)) void else void,
+        wgpu: if (rhi.platform_has_api(.wgpu)) void else void,
+        webgl: if (rhi.platform_has_api(.webgl)) void else void,
     },
 
     pub fn wait(self: *Self, device: *rhi.Device) !void {
@@ -91,6 +116,19 @@ pub const CommandRingElement = struct {
             // CAMetalLayer.nextDrawable, which blocks once the maximum number of
             // drawables is in flight. (An MTLSharedEvent could give finer-grained
             // overlap later.)
+            return;
+        }
+        if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+            // A browser frame cannot block on the GPU, and it does not need to:
+            // the page renders one frame per requestAnimationFrame callback, and
+            // the browser keeps every submitted resource alive until its work
+            // retires. Frame pacing is the compositor's job.
+            return;
+        }
+        if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+            // Same reasoning as WebGPU: a page cannot block on the GPU
+            // (`MAX_CLIENT_WAIT_TIMEOUT_WEBGL` is 0), and GL keeps deleted
+            // objects alive until the commands referencing them retire.
             return;
         }
         unreachable;
@@ -118,6 +156,10 @@ pub fn CommandRingBuffer(
             } else void,
             dx12: if (rhi.platform_has_api(.dx12)) void else void,
             mtl: if (rhi.platform_has_api(.mtl)) void else void,
+            // `sync_primative` is honored by allocating nothing: WebGPU has no
+            // fence or semaphore object for the ring to hand out.
+            wgpu: if (rhi.platform_has_api(.wgpu)) void else void,
+            webgl: if (rhi.platform_has_api(.webgl)) void else void,
         },
         pub fn advance(self: *Self) void {
             self.pool_index = (self.pool_index + 1) % options.pool_count;
@@ -144,6 +186,30 @@ pub fn CommandRingBuffer(
                     .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds],
                     .pool = &self.pools[self.pool_index],
                     .backend = .{ .mtl = {} },
+                };
+                self.fence_index += 1;
+                self.cmd_index += num_cmds;
+                return result;
+            }
+            if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+                std.debug.assert(num_cmds <= options.cmd_per_pool);
+                std.debug.assert(num_cmds + self.cmd_index <= options.cmd_per_pool);
+                const result = CommandRingElement{
+                    .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds],
+                    .pool = &self.pools[self.pool_index],
+                    .backend = .{ .wgpu = {} },
+                };
+                self.fence_index += 1;
+                self.cmd_index += num_cmds;
+                return result;
+            }
+            if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                std.debug.assert(num_cmds <= options.cmd_per_pool);
+                std.debug.assert(num_cmds + self.cmd_index <= options.cmd_per_pool);
+                const result = CommandRingElement{
+                    .cmds = self.cmds[self.pool_index][self.cmd_index .. self.cmd_index + num_cmds],
+                    .pool = &self.pools[self.pool_index],
+                    .backend = .{ .webgl = {} },
                 };
                 self.fence_index += 1;
                 self.cmd_index += num_cmds;
@@ -191,6 +257,28 @@ pub fn CommandRingBuffer(
                 }
                 return .{ .pool_index = options.pool_count, .cmd_index = 0, .fence_index = 0, .cmds = cmds, .pools = pools, .backend = .{ .mtl = {} } };
             }
+            if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+                var cmds: [options.pool_count][options.cmd_per_pool]rhi.Cmd = undefined;
+                var pools: [options.pool_count]rhi.Pool = undefined;
+                for (0..options.pool_count) |pool_index| {
+                    pools[pool_index] = try rhi.Pool.init(device, queue);
+                    for (0..options.cmd_per_pool) |cmd_index| {
+                        cmds[pool_index][cmd_index] = try rhi.Cmd.init(device, &pools[pool_index]);
+                    }
+                }
+                return .{ .pool_index = options.pool_count, .cmd_index = 0, .fence_index = 0, .cmds = cmds, .pools = pools, .backend = .{ .wgpu = {} } };
+            }
+            if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                var cmds: [options.pool_count][options.cmd_per_pool]rhi.Cmd = undefined;
+                var pools: [options.pool_count]rhi.Pool = undefined;
+                for (0..options.pool_count) |pool_index| {
+                    pools[pool_index] = try rhi.Pool.init(device, queue);
+                    for (0..options.cmd_per_pool) |cmd_index| {
+                        cmds[pool_index][cmd_index] = try rhi.Cmd.init(device, &pools[pool_index]);
+                    }
+                }
+                return .{ .pool_index = options.pool_count, .cmd_index = 0, .fence_index = 0, .cmds = cmds, .pools = pools, .backend = .{ .webgl = {} } };
+            }
 
             unreachable; // should never reach here
         }
@@ -220,6 +308,22 @@ pub fn CommandRingBuffer(
                 }
                 return;
             }
+            if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+                for (0..options.pool_count) |pool_index| {
+                    for (0..options.cmd_per_pool) |cmd_index| {
+                        self.cmds[pool_index][cmd_index].deinit(device, &self.pools[pool_index]);
+                    }
+                }
+                return;
+            }
+            if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                for (0..options.pool_count) |pool_index| {
+                    for (0..options.cmd_per_pool) |cmd_index| {
+                        self.cmds[pool_index][cmd_index].deinit(device, &self.pools[pool_index]);
+                    }
+                }
+                return;
+            }
             unreachable;
         }
     };
@@ -240,6 +344,26 @@ backend: union {
         index_buffer: ?rhi.metal.mtl.Buffer = null,
         index_type: rhi.metal.types.IndexType = .uint16,
     } else void,
+    // WebGPU splits recording in two: copies and pass creation go to the
+    // GPUCommandEncoder, while draw state goes to the GPURenderPassEncoder that
+    // `begin_rendering` opens. Both are held here, plus the GPUCommandBuffer
+    // that `end` produces and `Queue.submit` consumes.
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+        device: rhi.webgpu.Handle = .none,
+        queue: rhi.webgpu.Handle = .none,
+        encoder: rhi.webgpu.Handle = .none,
+        pass: rhi.webgpu.Handle = .none,
+        cmd_buffer: rhi.webgpu.Handle = .none,
+        /// Bound by `bind_pipeline` so `set_push_constants` can reach the
+        /// uniform buffer standing in for push constants.
+        pipeline: ?*rhi.Pipeline = null,
+    } else void,
+    // WebGL2 has no command buffer, so recording means appending to a list that
+    // `Queue.submit` replays. See `webgl/command_list.zig` for why this is
+    // deferred rather than issued inline.
+    webgl: if (rhi.platform_has_api(.webgl)) struct {
+        recorder: rhi.webgl.command_list.Recorder,
+    } else void,
 },
 
 pub fn init(device: *rhi.Device, pool: *Pool) !Cmd {
@@ -259,6 +383,17 @@ pub fn init(device: *rhi.Device, pool: *Pool) !Cmd {
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         return .{ .backend = .{ .mtl = .{ .queue = device.backend.mtl.queue } } };
     }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        return .{ .backend = .{ .wgpu = .{
+            .device = device.backend.wgpu.device,
+            .queue = device.backend.wgpu.queue,
+        } } };
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        return .{ .backend = .{ .webgl = .{
+            .recorder = rhi.webgl.command_list.Recorder.init(device.backend.webgl.allocator),
+        } } };
+    }
     unreachable;
 }
 
@@ -272,6 +407,21 @@ pub fn deinit(self: *Cmd, device: *rhi.Device, pool: *Pool) void {
         return;
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // An encoder or command buffer still live at teardown was never
+        // submitted; drop it so the JS handle table does not leak the entry.
+        rhi.webgpu.wgpu_release(self.backend.wgpu.pass);
+        rhi.webgpu.wgpu_release(self.backend.wgpu.encoder);
+        rhi.webgpu.wgpu_release(self.backend.wgpu.cmd_buffer);
+        self.backend.wgpu.pass = .none;
+        self.backend.wgpu.encoder = .none;
+        self.backend.wgpu.cmd_buffer = .none;
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        self.backend.webgl.recorder.deinit();
         return;
     }
     unreachable;
@@ -294,6 +444,21 @@ pub fn begin(self: *Cmd, device: *rhi.Device) !void {
         self.backend.mtl.encoder = null;
         return;
     }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        const wgpu = rhi.webgpu;
+        // A GPUCommandEncoder is single-use: it is consumed by `finish()`, so a
+        // fresh one is created per frame rather than reset like a Vulkan pool.
+        const encoder = wgpu.wgpu_device_create_command_encoder(self.backend.wgpu.device);
+        if (encoder.isNone()) return error.WebGPUCommandEncoderFailed;
+        self.backend.wgpu.encoder = encoder;
+        self.backend.wgpu.pass = .none;
+        self.backend.wgpu.pipeline = null;
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        self.backend.webgl.recorder.reset();
+        return;
+    }
     unreachable;
 }
 
@@ -305,6 +470,22 @@ pub fn end(self: *Cmd, device: *rhi.Device) !void {
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         // Commit happens in Swapchain.frame_submit.
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        const wgpu = rhi.webgpu;
+        std.debug.assert(self.backend.wgpu.pass.isNone()); // end_rendering not called
+        const buf = wgpu.wgpu_command_encoder_finish(self.backend.wgpu.encoder);
+        if (buf.isNone()) return error.WebGPUCommandEncoderFinishFailed;
+        // `finish()` consumes the encoder.
+        wgpu.wgpu_release(self.backend.wgpu.encoder);
+        self.backend.wgpu.encoder = .none;
+        self.backend.wgpu.cmd_buffer = buf;
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        // Recording is complete; `Queue.submit` replays it. Nothing to close.
+        std.debug.assert(!self.backend.webgl.recorder.pass_open); // end_rendering not called
         return;
     }
     unreachable;
@@ -437,6 +618,51 @@ pub fn begin_rendering(self: *Cmd, device: *rhi.Device, options: struct {
         self.backend.mtl.encoder = self.backend.mtl.cmd.?.renderCommandEncoder(desc) orelse unreachable;
         return;
     }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        const wgpu = rhi.webgpu;
+        // WebGPU render passes take exactly the attachments given here; there is
+        // no render area, so `render_area` only informs the default viewport,
+        // which the browser already derives from the attachment size.
+        std.debug.assert(options.color_attachments.len == 1); // WebGPU MRT is not wired up yet
+        const color = options.color_attachments[0];
+        const depth: rhi.webgpu.Handle = if (options.depth_attachment) |da| da.view.backend.wgpu else .none;
+        const pass = wgpu.wgpu_command_encoder_begin_render_pass(
+            self.backend.wgpu.encoder,
+            color.view.backend.wgpu,
+            wgpu.to_wgpu_load_op(color.load_op),
+            wgpu.to_wgpu_store_op(color.store_op),
+            color.clear_color[0],
+            color.clear_color[1],
+            color.clear_color[2],
+            color.clear_color[3],
+            depth,
+            if (options.depth_attachment) |da| wgpu.to_wgpu_load_op(da.load_op) else .clear,
+            if (options.depth_attachment) |da| wgpu.to_wgpu_store_op(da.store_op) else .store,
+            if (options.depth_attachment) |da| da.clear_depth else 1.0,
+        );
+        self.backend.wgpu.pass = pass;
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        std.debug.assert(options.color_attachments.len == 1); // MRT is not wired up
+        const color = options.color_attachments[0];
+        const rec = &self.backend.webgl.recorder;
+        // The FBO is resolved during replay from the views, so that a swapchain
+        // target uses the swapchain's own FBO rather than building a new one.
+        const fbo = rhi.webgl.resolve_framebuffer(device, color.view, options.depth_attachment);
+        rec.pass_open = true;
+        rec.append(.{ .begin_render_pass = .{
+            .fbo = fbo,
+            .width = color.view.backend.webgl.width,
+            .height = color.view.backend.webgl.height,
+            .clear_color = color.load_op == .clear,
+            .color = color.clear_color,
+            .has_depth = options.depth_attachment != null,
+            .clear_depth_value = if (options.depth_attachment) |d| d.load_op == .clear else false,
+            .depth = if (options.depth_attachment) |d| d.clear_depth else 1.0,
+        } });
+        return;
+    }
     unreachable;
 }
 
@@ -449,6 +675,18 @@ pub fn end_rendering(self: *Cmd, device: *rhi.Device) void {
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.endEncoding();
         self.backend.mtl.encoder = null;
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        rhi.webgpu.wgpu_render_pass_end(self.backend.wgpu.pass);
+        rhi.webgpu.wgpu_release(self.backend.wgpu.pass);
+        self.backend.wgpu.pass = .none;
+        self.backend.wgpu.pipeline = null;
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        self.backend.webgl.recorder.pass_open = false;
+        self.backend.webgl.recorder.append(.end_render_pass);
         return;
     }
     unreachable;
@@ -465,6 +703,16 @@ pub fn set_viewport(self: *Cmd, device: *rhi.Device, vp: Viewport) void {
         self.backend.mtl.encoder.?.setViewport(.{ .origin_x = vp.x, .origin_y = vp.y, .width = vp.width, .height = vp.height, .znear = vp.min_depth, .zfar = vp.max_depth });
         return;
     }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        rhi.webgpu.wgpu_render_pass_set_viewport(self.backend.wgpu.pass, vp.x, vp.y, vp.width, vp.height, vp.min_depth, vp.max_depth);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        // Recorded as given; the Y flip happens at replay, which is the only
+        // place that knows the render target's height.
+        self.backend.webgl.recorder.append(.{ .set_viewport = vp });
+        return;
+    }
     unreachable;
 }
 
@@ -477,6 +725,22 @@ pub fn set_scissor(self: *Cmd, device: *rhi.Device, rect: Rect) void {
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.setScissorRect(.{ .x = @intCast(rect.x), .y = @intCast(rect.y), .width = rect.width, .height = rect.height });
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // WebGPU scissor origins are unsigned; a negative origin is a validation
+        // error there rather than a clamp, so clamp it here.
+        rhi.webgpu.wgpu_render_pass_set_scissor_rect(
+            self.backend.wgpu.pass,
+            @intCast(@max(rect.x, 0)),
+            @intCast(@max(rect.y, 0)),
+            rect.width,
+            rect.height,
+        );
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        self.backend.webgl.recorder.append(.{ .set_scissor = rect });
         return;
     }
     unreachable;
@@ -495,6 +759,20 @@ pub fn bind_pipeline(self: *Cmd, device: *rhi.Device, pipeline: *rhi.Pipeline) v
         }
         return;
     }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        rhi.webgpu.wgpu_render_pass_set_pipeline(self.backend.wgpu.pass, pipeline.backend.wgpu.pipeline);
+        // Remembered so `set_push_constants` can find the uniform buffer and
+        // bind group this pipeline owns.
+        self.backend.wgpu.pipeline = pipeline;
+        if (!pipeline.backend.wgpu.push_constant_group.isNone()) {
+            rhi.webgpu.wgpu_render_pass_set_bind_group(self.backend.wgpu.pass, 0, pipeline.backend.wgpu.push_constant_group);
+        }
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        self.backend.webgl.recorder.append(.{ .bind_pipeline = pipeline });
+        return;
+    }
     unreachable;
 }
 
@@ -511,6 +789,27 @@ pub fn draw(self: *Cmd, device: *rhi.Device, options: struct {
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.drawPrimitives(.triangle, options.first_vertex, options.vertex_count);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        rhi.webgpu.wgpu_render_pass_draw(
+            self.backend.wgpu.pass,
+            options.vertex_count,
+            options.instance_count,
+            options.first_vertex,
+            options.first_instance,
+        );
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        // WebGL2 has no base instance: `drawArraysInstanced` starts at 0. A
+        // non-zero value would silently render the wrong thing.
+        std.debug.assert(options.first_instance == 0);
+        self.backend.webgl.recorder.append(.{ .draw = .{
+            .vertex_count = options.vertex_count,
+            .instance_count = options.instance_count,
+            .first_vertex = options.first_vertex,
+        } });
         return;
     }
     unreachable;
@@ -542,6 +841,28 @@ pub fn clear_attachment_regions(self: *Cmd, device: *rhi.Device, options: struct
         // need solid-color draws (a follow-up).
         return;
     }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // WebGPU has no mid-pass partial clear at all: a render pass clears only
+        // through its attachment load ops. Emulating this needs a dedicated
+        // pipeline and a quad draw per region, which is not wired up. Panicking
+        // rather than silently doing nothing keeps the gap visible; callers on
+        // web skip this entirely.
+        @panic("clear_attachment_regions: WebGPU has no mid-pass partial clear (use the attachment load_op)");
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        // WebGL2 *can* do this, unlike WebGPU: a scissored clear per region.
+        const rec = &self.backend.webgl.recorder;
+        const Region = rhi.webgl.command_list.ClearRegion;
+        var regions: [16]Region = undefined;
+        std.debug.assert(options.regions.len <= regions.len);
+        for (options.regions, 0..) |r, i| {
+            regions[i] = .{ .color = r.color, .x = r.rect.x, .y = r.rect.y, .width = r.rect.width, .height = r.rect.height };
+        }
+        const bytes = std.mem.sliceAsBytes(regions[0..options.regions.len]);
+        const offset = rec.stash(bytes);
+        rec.append(.{ .clear_regions = .{ .offset = offset, .count = @intCast(options.regions.len) } });
+        return;
+    }
     unreachable;
 }
 
@@ -557,6 +878,18 @@ pub fn bind_vertex_buffer(self: *Cmd, device: *rhi.Device, buffer: *rhi.Buffer, 
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.encoder.?.setVertexBuffer(buffer.backend.mtl.buffer, 0, rhi.pipeline.mtl_vertex_buffer_base + slot);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // A host-written buffer still holds its contents in a wasm-memory shadow
+        // until something uses it; flush before the GPU can read it.
+        buffer.flush(device);
+        rhi.webgpu.wgpu_render_pass_set_vertex_buffer(self.backend.wgpu.pass, slot, buffer.backend.wgpu.buffer, 0);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        buffer.flush(device);
+        self.backend.webgl.recorder.append(.{ .bind_vertex_buffer = .{ .buffer = buffer, .slot = slot } });
         return;
     }
     unreachable;
@@ -577,6 +910,21 @@ pub fn bind_index_buffer(self: *Cmd, device: *rhi.Device, buffer: *rhi.Buffer, i
             .uint16 => .uint16,
             .uint32 => .uint32,
         };
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        buffer.flush(device);
+        rhi.webgpu.wgpu_render_pass_set_index_buffer(
+            self.backend.wgpu.pass,
+            buffer.backend.wgpu.buffer,
+            rhi.webgpu.to_wgpu_index_format(index_type),
+            0,
+        );
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        buffer.flush(device);
+        self.backend.webgl.recorder.append(.{ .bind_index_buffer = .{ .buffer = buffer, .index_type = index_type } });
         return;
     }
     unreachable;
@@ -607,6 +955,28 @@ pub fn draw_indexed(self: *Cmd, device: *rhi.Device, options: struct {
         );
         return;
     }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        rhi.webgpu.wgpu_render_pass_draw_indexed(
+            self.backend.wgpu.pass,
+            options.index_count,
+            options.instance_count,
+            options.first_index,
+            options.vertex_offset,
+            0,
+        );
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        // WebGL2 has no base vertex (`glDrawElementsBaseVertex` is ES 3.2), so
+        // a non-zero offset cannot be honoured and must not be dropped quietly.
+        std.debug.assert(options.vertex_offset == 0);
+        self.backend.webgl.recorder.append(.{ .draw_indexed = .{
+            .index_count = options.index_count,
+            .instance_count = options.instance_count,
+            .first_index = options.first_index,
+        } });
+        return;
+    }
     unreachable;
 }
 
@@ -620,6 +990,35 @@ pub fn set_push_constants(self: *Cmd, device: *rhi.Device, pipeline: *rhi.Pipeli
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         // slangc places the vertex push-constant block at buffer index 0.
         self.backend.mtl.encoder.?.setVertexBytes(bytes.ptr, bytes.len, 0);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // WebGPU has no push constants. The pipeline owns a uniform buffer and a
+        // `@group(0) @binding(0)` bind group standing in for the block, bound by
+        // `bind_pipeline`; writing the buffer is all that remains. The write is
+        // a queue operation, so it lands before the submit that reads it.
+        const w = &pipeline.backend.wgpu;
+        std.debug.assert(!w.push_constant_buffer.isNone()); // pipeline declared no push constants
+        std.debug.assert(bytes.len <= w.push_constant_size);
+        rhi.webgpu.wgpu_queue_write_buffer(
+            self.backend.wgpu.queue,
+            w.push_constant_buffer,
+            0,
+            bytes.ptr,
+            @intCast(bytes.len),
+        );
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        // The bytes are copied into the recorder's arena: the caller's buffer
+        // (`std.mem.asBytes(&pc)` off the stack) is gone by replay time.
+        const rec = &self.backend.webgl.recorder;
+        const offset = rec.stash(bytes);
+        rec.append(.{ .set_push_constants = .{
+            .pipeline = pipeline,
+            .offset = offset,
+            .len = @intCast(bytes.len),
+        } });
         return;
     }
     unreachable;
@@ -706,6 +1105,33 @@ pub fn copy_buffer(self: *Cmd, device: *rhi.Device, options: struct {
             .size = options.size,
         }};
         dkb.cmdCopyBuffer(self.backend.vk.cmd, options.src.backend.vk.buffer, options.dst.backend.vk.buffer, regions[0..]);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // Copies are encoder-level commands and are illegal inside a render
+        // pass. Catch that here rather than letting the browser reject the whole
+        // submit with a validation message far from the cause.
+        std.debug.assert(self.backend.wgpu.pass.isNone());
+        options.src.flush(device);
+        rhi.webgpu.wgpu_command_encoder_copy_buffer_to_buffer(
+            self.backend.wgpu.encoder,
+            options.src.backend.wgpu.buffer,
+            @intCast(options.src_offset),
+            options.dst.backend.wgpu.buffer,
+            @intCast(options.dst_offset),
+            @intCast(options.size),
+        );
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        options.src.flush(device);
+        self.backend.webgl.recorder.append(.{ .copy_buffer = .{
+            .src = options.src,
+            .src_offset = @intCast(options.src_offset),
+            .dst = options.dst,
+            .dst_offset = @intCast(options.dst_offset),
+            .size = @intCast(options.size),
+        } });
         return;
     }
     @panic("copy_buffer: not yet implemented on the Metal backend");
@@ -1146,6 +1572,18 @@ pub fn resource_barrier(
             .p_image_memory_barriers = if (options.image_barriers.len != 0) vk_image[0..].ptr else null,
         };
         dkb.cmdPipelineBarrier2(self.backend.vk.cmd, &dependency_info);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // Nothing to emit. WebGPU tracks resource state itself and inserts the
+        // transitions and memory dependencies a submit needs, so an explicit
+        // barrier has no expressible form — a no-op here is the correct
+        // implementation, not a stub.
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        // Also nothing to emit: GL orders commands within a context by
+        // specification, so a barrier has no expressible form here either.
         return;
     }
     unreachable;

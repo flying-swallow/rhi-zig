@@ -30,6 +30,30 @@ backend: union {
         device: rhi.metal.mtl.Device,
         queue: rhi.metal.mtl.CommandQueue,
     } else void,
+    // Like Metal, WebGPU has a single device-level queue; there are no queue
+    // families and no separate compute/transfer queues to pick.
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+        device: rhi.webgpu.Handle = .none,
+        queue: rhi.webgpu.Handle = .none,
+        /// Backs the wasm-memory shadow allocations that stand in for
+        /// persistently-mapped buffers (see `Buffer.flush`). Captured from
+        /// `init`'s allocator, which must outlive the device.
+        allocator: std.mem.Allocator,
+    } else void,
+    // GL keeps its state in the context rather than in objects, so the pieces
+    // the RHI models as objects have to be tracked here.
+    webgl: if (rhi.platform_has_api(.webgl)) struct {
+        allocator: std.mem.Allocator,
+        /// WebGL2 cannot configure vertex format and vertex buffer separately,
+        /// so a VAO is cached per (pipeline, vertex buffer, index buffer).
+        vao_cache: rhi.webgl.VaoCache,
+        /// Render passes are FBOs; cached on the same basis as the VAOs.
+        fbo_cache: rhi.webgl.FboCache,
+        /// The buffers bound by the most recent `bind_*_buffer` replay, which
+        /// together with the bound pipeline key the cache above.
+        current_vertex_buffer: ?*rhi.Buffer = null,
+        current_index_buffer: ?*rhi.Buffer = null,
+    } else void,
 } = undefined,
 
 fn supports_extension(extensions: [][*:0]const u8, value: []const u8) bool {
@@ -339,6 +363,39 @@ pub fn init(allocator: std.mem.Allocator, adapter: *rhi.PhysicalAdapter) !Device
             .backend = .{ .mtl = .{ .device = mtl_device, .queue = queue } },
         };
     }
+    if (rhi.is_target_selected(.webgl)) {
+        if (rhi.webgl.gl_available() == 0) return error.WebGL2Unavailable;
+        // GL has one implicit queue: the context itself.
+        const graphics_queue = rhi.Queue{ .backend = .{ .webgl = .{} } };
+        return .{
+            .graphics_queue = graphics_queue,
+            .compute_queue = null,
+            .transfer_queue = null,
+            .adapter = adapter.*,
+            .backend = .{ .webgl = .{
+                .allocator = allocator,
+                .vao_cache = rhi.webgl.VaoCache.init(allocator),
+                .fbo_cache = rhi.webgl.FboCache.init(allocator),
+            } },
+        };
+    }
+    if (rhi.is_target_selected(.wgpu)) {
+        const wgpu = rhi.webgpu;
+        // The glue requested the device alongside the adapter, before this
+        // module was instantiated, so there is nothing async to await here.
+        const wgpu_device = wgpu.wgpu_device_get();
+        if (wgpu_device.isNone()) return error.WebGPUDeviceUnavailable;
+        const queue = wgpu.wgpu_device_get_queue(wgpu_device);
+        if (queue.isNone()) return error.WebGPUQueueUnavailable;
+        const graphics_queue = rhi.Queue{ .backend = .{ .wgpu = .{ .queue = queue } } };
+        return .{
+            .graphics_queue = graphics_queue,
+            .compute_queue = null,
+            .transfer_queue = null,
+            .adapter = adapter.*,
+            .backend = .{ .wgpu = .{ .device = wgpu_device, .queue = queue, .allocator = allocator } },
+        };
+    }
     return error.Unitialized;
 }
 
@@ -352,6 +409,18 @@ pub fn deinit(self: *Device) void {
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.queue.release();
         self.backend.mtl.device.release();
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        self.backend.webgl.vao_cache.deinit();
+        self.backend.webgl.fbo_cache.deinit();
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        rhi.webgpu.wgpu_release(self.backend.wgpu.queue);
+        rhi.webgpu.wgpu_release(self.backend.wgpu.device);
+        self.backend.wgpu.queue = .none;
+        self.backend.wgpu.device = .none;
         return;
     }
     unreachable;

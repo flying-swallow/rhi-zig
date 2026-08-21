@@ -38,8 +38,8 @@ pub const gpu_ref = @import("gpu_ref.zig");
 /// Dear ImGui rendering layer + the raw dear_bindings C API (for building UI).
 /// Both are compiled out of a `headless` build — that config wires no cimgui
 /// module and links no imgui, so referencing these there is a comptime error.
-pub const imgui = if (build_options.headless) void else @import("imgui.zig");
-pub const imgui_c = if (build_options.headless) void else @import("cimgui");
+pub const imgui = if (build_options.headless or is_web) void else @import("imgui.zig");
+pub const imgui_c = if (build_options.headless or is_web) void else @import("cimgui");
 
 /// Asset loaders. Only the std-only glTF loader is wired up here; the legacy
 /// Wavefront OBJ loader depends on an external math module that is not part of
@@ -92,7 +92,7 @@ pub const ResourceLoader = resource_loader.ResourceLoader;
 pub const Pipeline = pipeline.Pipeline;
 pub const PipelineLayout = pipeline_layout.PipelineLayout;
 pub const Shader = shader.Shader;
-pub const ImGui = if (build_options.headless) void else imgui.ImguiLayer;
+pub const ImGui = if (build_options.headless or is_web) void else imgui.ImguiLayer;
 pub const Semaphore = semaphore.Semaphore;
 pub const Timeline = timeline.Timeline;
 pub const ScratchAlloc = scratch_alloc.ScratchAlloc;
@@ -112,9 +112,17 @@ pub const GpuScope = gpu_profiler.GpuScope;
 /// id stamped on a resource at creation; it is used as a descriptor-set cache
 /// key because a raw backend handle is unsafe as identity (handles get reused).
 /// `0` is reserved for "empty / uncreated".
-var cookie_counter: std.atomic.Value(u64) = .init(1);
+/// wasm32 without the atomics feature has no 64-bit atomic ops, and a WebGPU
+/// build is single-threaded (one browser main thread) so it does not need them.
+/// Every other target keeps the atomic counter.
+var cookie_counter: if (is_web) u64 else std.atomic.Value(u64) = if (is_web) 1 else .init(1);
 
 pub fn next_cookie() u64 {
+    if (comptime is_web) {
+        const v = cookie_counter;
+        cookie_counter += 1;
+        return v;
+    }
     return cookie_counter.fetchAdd(1, .monotonic);
 }
 
@@ -129,15 +137,29 @@ pub const DescriptorType = enum {
     acceleration_structure,
 };
 
-pub const Selection = enum { default, vk, dx12, mtl };
+pub const Selection = enum { default, vk, dx12, mtl, wgpu, webgl };
 
 pub const Backend = enum {
     vk,
     dx12,
     mtl,
+    wgpu,
+    webgl,
 };
 
-pub const platform_api = if (build_options.headless) [_]Backend{} else blk: {
+/// WebGPU and WebGL2 are web-only backends: they exist exactly on WebAssembly
+/// targets, and nowhere else. There is no native wgpu-native/Dawn or desktop-GL
+/// path — on desktop the backend set is unchanged.
+pub const is_web = builtin.cpu.arch.isWasm();
+
+pub const platform_api = if (build_options.headless)
+    [_]Backend{}
+else if (is_web)
+    // Both web backends are compiled in and chosen at run time: the JS glue
+    // probes `navigator.gpu` first and falls back to WebGL2, which needs no
+    // browser flags. Same shape as `.windows` carrying both vk and dx12.
+    [_]Backend{ .wgpu, .webgl }
+else blk: {
     switch (builtin.os.tag) {
         .windows => break :blk [_]Backend{ .vk, .dx12 },
         .linux => break :blk [_]Backend{.vk},
@@ -156,6 +178,8 @@ pub fn platform_has_api(comptime target: Backend) bool {
 
 pub const vulkan = if (platform_has_api(.vk)) @import("vulkan.zig") else void;
 pub const metal = if (platform_has_api(.mtl)) @import("metal.zig") else void;
+pub const webgpu = if (platform_has_api(.wgpu)) @import("webgpu.zig") else void;
+pub const webgl = if (platform_has_api(.webgl)) @import("webgl.zig") else void;
 
 /// `inline` so that `platform_has_api(api)` (a comptime-known bool) folds into
 /// the caller's `if` condition: on a platform where `api` is unavailable the
@@ -236,6 +260,10 @@ test "metal: swapchain drawable + command buffer" {
 }
 
 test {
+    // Compiles on every target: the WebGPU enum tables and their glue.js
+    // contract check are backend-neutral even though the backend is web-only.
+    _ = @import("webgpu/enums.zig");
+    _ = @import("webgl/enums.zig");
     _ = @import("acceleration_structure.zig");
     _ = @import("cmd.zig");
     _ = @import("io/gltf/gltf.zig");

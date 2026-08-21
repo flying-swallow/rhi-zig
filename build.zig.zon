@@ -7,6 +7,10 @@
         .vma = .{ .path = "deps/vma", .lazy = true },
         .metal = .{ .path = "deps/metal", .lazy = true },
         .slang = .{ .path = "deps/slang", .lazy = true },
+        // Translates the examples' SPIR-V into GLSL ES 3.00 for the WebGL2
+        // backend; Slang itself cannot emit an ES profile. Lazy, and only
+        // resolved for a WebAssembly target (see build.zig).
+        .spirv_cross = .{ .path = "deps/spirv_cross", .lazy = true },
         // Lazy + resolved only for a Windows target (see build.zig): it pulls a
         // glfw_zig/wayland_zig/toolbox chain that isn't needed off Windows and
         // breaks on newer zig nightlies (toolbox uses the deleted

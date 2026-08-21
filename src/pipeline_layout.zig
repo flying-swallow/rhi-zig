@@ -28,6 +28,10 @@ pub const DescriptorRangeBits = enum(u8) { none = 0, paritially_bound = 1 << 0, 
 backend: union {
     vk: rhi.wrapper_platform_type(.vk, struct { layout: rhi.vulkan.vk.PipelineLayout }),
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
+    // Render pipelines on WebGPU use `layout: "auto"`, deriving bind group
+    // layouts from the shader, so there is no standalone layout object.
+    wgpu: rhi.wrapper_platform_type(.wgpu, struct {}),
+    webgl: rhi.wrapper_platform_type(.webgl, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 },
 

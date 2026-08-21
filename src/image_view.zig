@@ -45,6 +45,15 @@ pub const ImageView = struct {
         vk: if (rhi.platform_has_api(.vk)) rhi.vulkan.vk.ImageView else void,
         dx12: rhi.wrapper_platform_type(.dx12, struct {}),
         mtl: if (rhi.platform_has_api(.mtl)) rhi.metal.mtl.Texture else void,
+        wgpu: if (rhi.platform_has_api(.wgpu)) rhi.webgpu.Handle else void,
+        // GL has no view object; a view is the texture plus the description an
+        // FBO attachment needs, carried on the Image.
+        webgl: if (rhi.platform_has_api(.webgl)) struct {
+            texture: rhi.webgl.Handle = .none,
+            format: rhi.Format = .unknown,
+            width: u32 = 0,
+            height: u32 = 0,
+        } else void,
     },
     cookie: u64 = 0,
 
@@ -105,6 +114,40 @@ pub const ImageView = struct {
             // Metal textures are their own views.
             return .{ .backend = .{ .mtl = image.backend.mtl.texture }, .cookie = rhi.next_cookie() };
         }
+        if (rhi.is_target_selected(.webgl)) {
+            // GL has no view object: an FBO attachment references the texture
+            // directly, so a view is the texture plus what an attachment needs.
+            if (desc.base_mip != 0 or desc.mip_num != 1 or desc.base_layer != 0 or desc.layer_num != 1)
+                return error.UnsupportedBackend;
+            // Validates the format even though nothing is created from it here,
+            // so an unsupported one is reported at view creation rather than at
+            // framebuffer completeness.
+            _ = try rhi.webgl.to_gl_format(desc.format);
+            return .{
+                .backend = .{ .webgl = .{
+                    .texture = image.backend.webgl.texture,
+                    .format = desc.format,
+                    .width = image.backend.webgl.width,
+                    .height = image.backend.webgl.height,
+                } },
+                .cookie = rhi.next_cookie(),
+            };
+        }
+        if (rhi.is_target_selected(.wgpu)) {
+            const wgpu = rhi.webgpu;
+            const view = wgpu.wgpu_texture_create_view(
+                image.backend.wgpu.texture,
+                try wgpu.to_wgpu_texture_format(desc.format),
+                try wgpu.to_wgpu_view_dimension(desc.view_type),
+                wgpu.to_wgpu_aspect(desc.aspect),
+                desc.base_mip,
+                desc.mip_num,
+                desc.base_layer,
+                desc.layer_num,
+            );
+            if (view.isNone()) return error.WebGPUTextureViewCreationFailed;
+            return .{ .backend = .{ .wgpu = view }, .cookie = rhi.next_cookie() };
+        }
         return error.UnsupportedBackend;
     }
 
@@ -116,5 +159,17 @@ pub const ImageView = struct {
         }
         // Metal: no-op — Image owns the MTLTexture.
         if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) return;
+        // Like Metal, GL has no view object; the Image owns the texture. The
+        // cached FBOs keyed on this view's cookie do have to go, though.
+        if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+            device.backend.webgl.fbo_cache.invalidate(self.cookie);
+            return;
+        }
+        // WebGPU views are real objects, unlike Metal's, so they must be dropped.
+        if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+            rhi.webgpu.wgpu_release(self.backend.wgpu);
+            self.backend.wgpu = .none;
+            return;
+        }
     }
 };

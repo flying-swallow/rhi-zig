@@ -18,6 +18,39 @@ backend: union {
         // render pipeline, so it is carried here and set by `Cmd.bind_pipeline`.
         depth_stencil_state: ?rhi.metal.mtl.DepthStencilState = null,
     } else void,
+    // WebGPU has no push constants, so a pipeline that declares them owns the
+    // uniform buffer + bind group standing in for them. `Cmd.set_push_constants`
+    // writes the buffer and binds the group; the shader declares the block as
+    // `[[vk::binding(0,0)]] ConstantBuffer<T>` so slangc emits a valid
+    // `@group(0) @binding(0) var<uniform>`.
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+        pipeline: rhi.webgpu.Handle = .none,
+        push_constant_buffer: rhi.webgpu.Handle = .none,
+        push_constant_group: rhi.webgpu.Handle = .none,
+        push_constant_size: u32 = 0,
+    } else void,
+    // GL has no pipeline object: everything `init_graphics` bakes is context
+    // state applied at bind time, plus a linked program. The vertex layout is
+    // kept here rather than baked into a VAO, because a VAO also fuses in the
+    // buffers, which are not known yet (see `webgl.VaoCache`).
+    webgl: if (rhi.platform_has_api(.webgl)) struct {
+        /// Stable id used as part of the VAO cache key; GL reuses handles.
+        cookie: u64 = 0,
+        program: rhi.webgl.Handle = .none,
+        topology: u32 = 0,
+        index_type: u32 = 0,
+        depth_test: bool = false,
+        depth_write: bool = false,
+        depth_compare: u32 = 0,
+        cull_enabled: bool = false,
+        cull_mode: u32 = 0,
+        front_face: u32 = 0,
+        vertex_stride: u32 = 0,
+        vertex_attribute_count: u32 = 0,
+        vertex_attributes: [8]rhi.webgl.VertexAttrib = undefined,
+        push_constant_member_count: u32 = 0,
+        push_constant_members: [16]rhi.webgl.PushConstantMember = undefined,
+    } else void,
 },
 
 pub fn deinit(self: *Pipeline, device: *rhi.Device) void {
@@ -31,6 +64,23 @@ pub fn deinit(self: *Pipeline, device: *rhi.Device) void {
     if (rhi.is_target_selected(.mtl)) {
         if (self.backend.mtl.depth_stencil_state) |dss| dss.release();
         self.backend.mtl.state.release();
+        return;
+    }
+    if (rhi.is_target_selected(.webgl)) {
+        const w = &self.backend.webgl;
+        device.backend.webgl.vao_cache.invalidate(w.cookie);
+        rhi.webgl.gl_delete_program(w.program);
+        w.program = .none;
+        return;
+    }
+    if (rhi.is_target_selected(.wgpu)) {
+        const w = &self.backend.wgpu;
+        rhi.webgpu.wgpu_release(w.push_constant_group);
+        rhi.webgpu.wgpu_release(w.push_constant_buffer);
+        rhi.webgpu.wgpu_release(w.pipeline);
+        w.push_constant_group = .none;
+        w.push_constant_buffer = .none;
+        w.pipeline = .none;
         return;
     }
 }
@@ -213,7 +263,213 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
         }
         return .{ .backend = .{ .mtl = .{ .state = state, .depth_stencil_state = depth_stencil_state } } };
     }
+    if (rhi.is_target_selected(.webgl)) {
+        const webgl = rhi.webgl;
+        const sh = &options.shader.backend.webgl;
+
+        var err_buf: [1024]u8 = undefined;
+        @memset(&err_buf, 0);
+        const program = webgl.gl_create_program(
+            sh.vertex_source.ptr,
+            @intCast(sh.vertex_source.len),
+            sh.fragment_source.ptr,
+            @intCast(sh.fragment_source.len),
+            &err_buf,
+            err_buf.len,
+        );
+        if (program.isNone()) {
+            const msg = std.mem.sliceTo(&err_buf, 0);
+            webgl.log_err("program link failed: {s}", .{msg});
+            return error.ShaderCompilationFailed;
+        }
+        errdefer webgl.gl_delete_program(program);
+
+        var result: Pipeline = .{ .backend = .{ .webgl = .{
+            .cookie = rhi.next_cookie(),
+            .program = program,
+            .topology = webgl.gl.TRIANGLES,
+            .index_type = webgl.gl.UNSIGNED_SHORT,
+            .depth_test = options.depth_test,
+            .depth_write = options.depth_test,
+            .depth_compare = webgl.gl.LESS,
+            // Matches the Vulkan arm, which disables culling and winds
+            // clockwise. SPIRV-Cross flips Y in the shader, which reverses the
+            // apparent winding, so `.ccw` here corresponds to the other
+            // backends' `.cw`.
+            .cull_enabled = false,
+            .cull_mode = webgl.gl.BACK,
+            .front_face = webgl.gl.CCW,
+        } } };
+
+        if (options.vertex_layout) |layout_desc| {
+            std.debug.assert(layout_desc.attributes.len <= 8);
+            result.backend.webgl.vertex_stride = layout_desc.stride;
+            result.backend.webgl.vertex_attribute_count = @intCast(layout_desc.attributes.len);
+            for (layout_desc.attributes, 0..) |attr, i| {
+                result.backend.webgl.vertex_attributes[i] = .{
+                    .location = attr.location,
+                    .components = webgl.enums.vertex_components(attr.format),
+                    .offset = attr.offset,
+                };
+            }
+        }
+
+        if (options.push_constant_size > 0) {
+            try reflect_push_constants(&result, options.push_constant_size);
+        }
+        return result;
+    }
+    if (rhi.is_target_selected(.wgpu)) {
+        const wgpu = rhi.webgpu;
+        const sh = &options.shader.backend.wgpu;
+
+        // Vertex attributes cross the wasm boundary as a flat array of
+        // (location, format, offset) triples rather than a struct, so there is
+        // no field layout for the JS side to drift out of sync with.
+        var attrs: [8 * 3]u32 = undefined;
+        var attr_count: u32 = 0;
+        var stride: u32 = 0;
+        if (options.vertex_layout) |layout_desc| {
+            std.debug.assert(layout_desc.attributes.len <= 8);
+            stride = layout_desc.stride;
+            for (layout_desc.attributes, 0..) |attr, i| {
+                attrs[i * 3 + 0] = attr.location;
+                attrs[i * 3 + 1] = @intFromEnum(wgpu.to_wgpu_vertex_format(attr.format));
+                attrs[i * 3 + 2] = attr.offset;
+            }
+            attr_count = @intCast(layout_desc.attributes.len * 3);
+        }
+
+        // `depth_test` is documented as targeting D32_SFLOAT, matching the other
+        // backends; `.undefined_format` means the pass has no depth attachment.
+        const depth_format: wgpu.TextureFormat = if (options.depth_test) .depth32float else .undefined_format;
+
+        const pipeline = wgpu.wgpu_device_create_render_pipeline(
+            device.backend.wgpu.device,
+            sh.vertex_module,
+            sh.vertex_entry.ptr,
+            @intCast(sh.vertex_entry.len),
+            sh.fragment_module,
+            sh.fragment_entry.ptr,
+            @intCast(sh.fragment_entry.len),
+            options.swapchain.backend.wgpu.format,
+            depth_format,
+            .triangle_list,
+            .none,
+            // The Vulkan arm rasterizes with `front_face = .clockwise` and no
+            // culling; match it so the same mesh winds the same way.
+            .cw,
+            @intFromBool(options.depth_test),
+            .less,
+            stride,
+            &attrs,
+            attr_count,
+        );
+        if (pipeline.isNone()) return error.WebGPUPipelineCreationFailed;
+
+        var result: Pipeline = .{ .backend = .{ .wgpu = .{ .pipeline = pipeline } } };
+        if (options.push_constant_size > 0) {
+            // WebGPU has no push constants, so the block becomes a uniform buffer
+            // at `@group(0) @binding(0)` that this pipeline owns and
+            // `Cmd.set_push_constants` writes. The shader must declare it as
+            // `[[vk::binding(0,0)]] ConstantBuffer<T>`; slangc's
+            // `[[vk::push_constant]]` emits a `var<uniform>` with no
+            // group/binding attribute, which WebGPU rejects outright.
+            //
+            // Uniform buffer bindings must be a multiple of 16 bytes.
+            const size = std.mem.alignForward(u32, options.push_constant_size, 16);
+            const buf = wgpu.wgpu_device_create_buffer(
+                device.backend.wgpu.device,
+                size,
+                wgpu.BufferUsage.uniform | wgpu.BufferUsage.copy_dst,
+            );
+            if (buf.isNone()) {
+                wgpu.wgpu_release(pipeline);
+                return error.WebGPUBufferCreationFailed;
+            }
+            // The pipeline was created with `layout: "auto"`, so its bind group
+            // layout is derived from the shader rather than built by hand.
+            const layout = wgpu.wgpu_render_pipeline_get_bind_group_layout(pipeline, 0);
+            const group = wgpu.wgpu_device_create_bind_group_uniform(device.backend.wgpu.device, layout, buf, 0, size);
+            wgpu.wgpu_release(layout);
+            if (group.isNone()) {
+                wgpu.wgpu_release(buf);
+                wgpu.wgpu_release(pipeline);
+                return error.WebGPUBindGroupCreationFailed;
+            }
+            result.backend.wgpu.push_constant_buffer = buf;
+            result.backend.wgpu.push_constant_group = group;
+            result.backend.wgpu.push_constant_size = size;
+        }
+        return result;
+    }
     return error.UnsupportedBackend;
+}
+
+/// Resolves the push-constant block into individual `glUniform*` targets.
+///
+/// GL has no push constants. SPIRV-Cross emits the block as a plain struct
+/// uniform (`uniform PushConsts_std430 pc;`), whose members are set one at a
+/// time, so they are reflected once here at link time.
+///
+/// Offsets are derived from declaration order and natural packing, because a
+/// plain struct uniform — unlike a uniform *block* — exposes no queryable
+/// member offsets. The total is checked against the declared
+/// `push_constant_size`, which is what catches a layout this assumption cannot
+/// model rather than letting it silently feed wrong values to the shader.
+fn reflect_push_constants(pipeline: *Pipeline, push_constant_size: u32) !void {
+    const webgl = rhi.webgl;
+    const w = &pipeline.backend.webgl;
+    const count = webgl.gl_active_uniform_count(w.program);
+
+    var offset: u32 = 0;
+    var n: u32 = 0;
+    var i: u32 = 0;
+    while (i < count) : (i += 1) {
+        var name_buf: [128]u8 = undefined;
+        var gl_type: u32 = 0;
+        const name_len = webgl.gl_active_uniform_info(w.program, i, &name_buf, name_buf.len, &gl_type);
+        if (name_len == 0) continue;
+        const name = name_buf[0..name_len];
+        // Only members of the push-constant struct; a bare uniform has no dot.
+        if (std.mem.indexOfScalar(u8, name, '.') == null) continue;
+
+        const size: u32 = switch (gl_type) {
+            webgl.gl.FLOAT, webgl.gl.INT => 4,
+            webgl.gl.FLOAT_VEC2 => 8,
+            webgl.gl.FLOAT_VEC3 => 12,
+            webgl.gl.FLOAT_VEC4 => 16,
+            webgl.gl.FLOAT_MAT4 => 64,
+            else => return error.UnsupportedPushConstantMember,
+        };
+        // Natural alignment: 4 for scalars, the component size for vectors, as
+        // an `extern struct` of f32 arrays lays out on the CPU side.
+        const alignment: u32 = if (size >= 16) 16 else if (size >= 8) 8 else 4;
+        offset = std.mem.alignForward(u32, offset, alignment);
+
+        if (n >= w.push_constant_members.len) return error.TooManyPushConstantMembers;
+        w.push_constant_members[n] = .{
+            .location = webgl.gl_uniform_location(w.program, name.ptr, name_len),
+            .gl_type = gl_type,
+            .offset = offset,
+            .size = size,
+        };
+        offset += size;
+        n += 1;
+    }
+
+    if (n == 0) {
+        // The pipeline declares push constants but the program exposes none:
+        // the shader was compiled without the block, or the driver optimised it
+        // away. Either way `set_push_constants` would silently do nothing.
+        webgl.log_err("pipeline declares {d} bytes of push constants but the program exposes no matching uniforms", .{push_constant_size});
+        return error.PushConstantsNotFound;
+    }
+    if (offset != push_constant_size) {
+        webgl.log_err("reflected push constants total {d} bytes, but the pipeline declares {d}", .{ offset, push_constant_size });
+        return error.PushConstantLayoutMismatch;
+    }
+    w.push_constant_member_count = n;
 }
 
 fn vk_vertex_format(format: VertexFormat) rhi.vulkan.vk.Format {

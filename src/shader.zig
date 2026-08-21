@@ -37,6 +37,26 @@ backend: union(rhi.Backend) {
         fragment_library: ?rhi.metal.mtl.Library = null,
         fragment_function: ?rhi.metal.mtl.Function = null,
     } else void,
+    // WGSL keeps the entry point's real name (`@vertex fn vertexMain`), unlike
+    // the SPIR-V path where slangc rewrites every entry point to `main` and the
+    // Vulkan arm can hardcode it. The names are captured here and handed to
+    // `createRenderPipeline`. The slices point at the caller's `entry_point`
+    // arguments, which the examples supply as string literals.
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+        vertex_module: rhi.webgpu.Handle = .none,
+        vertex_entry: []const u8 = "",
+        fragment_module: rhi.webgpu.Handle = .none,
+        fragment_entry: []const u8 = "",
+        compute_module: rhi.webgpu.Handle = .none,
+        compute_entry: []const u8 = "",
+    } else void,
+    // GL links a whole program from both stages at once, so there is no
+    // per-stage object and no entry point name: SPIRV-Cross always emits
+    // `main`. The GLSL source is retained until the pipeline links it.
+    webgl: if (rhi.platform_has_api(.webgl)) struct {
+        vertex_source: []const u8 = "",
+        fragment_source: []const u8 = "",
+    } else void,
 },
 
 pub fn stages(self: *Shader) Stage {
@@ -80,6 +100,21 @@ pub fn deinit(self: *Shader, device: *rhi.Device) void {
         const vk = self.backend.vk;
         if (vk.vertex_module != .null_handle) dkb.destroyShaderModule(device.backend.vk.device, vk.vertex_module, null);
         if (vk.pixel_module != .null_handle) dkb.destroyShaderModule(device.backend.vk.device, vk.pixel_module, null);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        // The sources are borrowed from the caller and the program belongs to
+        // the pipeline, so there is nothing to release.
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        const w = &self.backend.wgpu;
+        rhi.webgpu.wgpu_release(w.vertex_module);
+        rhi.webgpu.wgpu_release(w.fragment_module);
+        rhi.webgpu.wgpu_release(w.compute_module);
+        w.vertex_module = .none;
+        w.fragment_module = .none;
+        w.compute_module = .none;
         return;
     }
 }
@@ -142,6 +177,48 @@ pub fn init_graphics_shader(device: *rhi.Device, options: struct {
             const name = rhi.metal.ns.String.fromUtf8Slice(stage.entry_point);
             result.backend.mtl.fragment_library = lib;
             result.backend.mtl.fragment_function = lib.newFunction(name) orelse return error.ShaderEntryPointNotFound;
+        }
+        return result;
+    }
+    if (rhi.is_target_selected(.webgl)) {
+        // GL links one program from both stages, so nothing is created here —
+        // the sources are held until `Pipeline.init_graphics` links them. The
+        // entry point name is ignored: SPIRV-Cross always emits `main`.
+        if (options.geometry_stage != null or options.hull_stage != null or options.domain_stage != null)
+            return error.UnsupportedBackend;
+        if (options.comp_stage != null) return error.UnsupportedBackend; // no compute in WebGL2
+        return .{ .backend = .{ .webgl = .{
+            .vertex_source = if (options.vertex_stage) |s| s.data else "",
+            .fragment_source = if (options.fragment_stage) |s| s.data else "",
+        } } };
+    }
+    if (rhi.is_target_selected(.wgpu)) {
+        const wgpu = rhi.webgpu;
+        // `data` is WGSL source text here, not SPIR-V words, so the 4-byte
+        // alignment the Vulkan arm asserts does not apply.
+        if (options.geometry_stage != null or options.hull_stage != null or options.domain_stage != null)
+            return error.UnsupportedBackend; // WebGPU has no geometry or tessellation stages
+
+        var result: Shader = .{ .backend = .{ .wgpu = .{} } };
+        errdefer result.deinit(device);
+        const dev = device.backend.wgpu.device;
+        if (options.vertex_stage) |stage| {
+            const m = wgpu.wgpu_device_create_shader_module(dev, stage.data.ptr, @intCast(stage.data.len));
+            if (m.isNone()) return error.ShaderCompilationFailed;
+            result.backend.wgpu.vertex_module = m;
+            result.backend.wgpu.vertex_entry = stage.entry_point;
+        }
+        if (options.fragment_stage) |stage| {
+            const m = wgpu.wgpu_device_create_shader_module(dev, stage.data.ptr, @intCast(stage.data.len));
+            if (m.isNone()) return error.ShaderCompilationFailed;
+            result.backend.wgpu.fragment_module = m;
+            result.backend.wgpu.fragment_entry = stage.entry_point;
+        }
+        if (options.comp_stage) |stage| {
+            const m = wgpu.wgpu_device_create_shader_module(dev, stage.data.ptr, @intCast(stage.data.len));
+            if (m.isNone()) return error.ShaderCompilationFailed;
+            result.backend.wgpu.compute_module = m;
+            result.backend.wgpu.compute_entry = stage.entry_point;
         }
         return result;
     }

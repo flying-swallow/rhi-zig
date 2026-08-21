@@ -116,6 +116,11 @@ backend: union {
         device_address: u64 = 0,
     } else void,
     dx12: rhi.wrapper_platform_type(.dx12, struct {}),
+    // WebGPU has no ray tracing. Every entry point reports
+    // `error.UnsupportedBackend` rather than pretending.
+    wgpu: rhi.wrapper_platform_type(.wgpu, struct {}),
+    // WebGL2 has no ray tracing either.
+    webgl: rhi.wrapper_platform_type(.webgl, struct {}),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
 } = undefined,
 

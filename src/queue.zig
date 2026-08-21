@@ -16,6 +16,11 @@ backend: union {
     mtl: if (rhi.platform_has_api(.mtl)) struct {
         queue: rhi.metal.mtl.CommandQueue,
     } else void,
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+        queue: rhi.webgpu.Handle = .none,
+    } else void,
+    // GL has no queue object; the context is the queue.
+    webgl: if (rhi.platform_has_api(.webgl)) struct {} else void,
 },
 
 pub fn submit(self: *Queue, device: *rhi.Device, options: struct {
@@ -27,6 +32,17 @@ pub fn submit(self: *Queue, device: *rhi.Device, options: struct {
     } else void = null,
     dx12: ?if (rhi.platform_has_api(.dx12)) void else void = null,
     mtl: ?if (rhi.platform_has_api(.mtl)) void else void = null,
+    // WebGPU submission carries no wait/signal semaphores: work submitted to a
+    // queue is ordered against everything before it, and the browser presents
+    // the canvas implicitly once the frame callback returns.
+    wgpu: ?if (rhi.platform_has_api(.wgpu)) struct {
+        cmds: []const *rhi.Cmd = &.{},
+    } else void = null,
+    // WebGL2 has no command buffer, so submitting means replaying what `Cmd`
+    // recorded (see `webgl/command_list.zig`).
+    webgl: ?if (rhi.platform_has_api(.webgl)) struct {
+        cmds: []const *rhi.Cmd = &.{},
+    } else void = null,
 }) !void {
     if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         const vk = rhi.vulkan.vk;
@@ -49,6 +65,31 @@ pub fn submit(self: *Queue, device: *rhi.Device, options: struct {
         _ = try device.backend.vk.dkb.queueSubmit(self.backend.vk.queue, &submit_infos, .null_handle);
         return;
     }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        const wgpu = rhi.webgpu;
+        std.debug.assert(options.wgpu != null);
+        const opts = options.wgpu.?;
+        // Shadow-buffer writes are flushed at bind time (see `Buffer.flush`), and
+        // `queueWriteBuffer` is ordered against later submits on the same queue,
+        // so there is nothing to reconcile here.
+        // The `*rhi.Cmd` entries are not contiguous, so gather their handles.
+        var bufs: [8]wgpu.Handle = undefined;
+        std.debug.assert(opts.cmds.len <= bufs.len);
+        for (opts.cmds, 0..) |c, i| bufs[i] = c.backend.wgpu.cmd_buffer;
+        wgpu.wgpu_queue_submit(self.backend.wgpu.queue, &bufs, @intCast(opts.cmds.len));
+        for (opts.cmds) |c| {
+            wgpu.wgpu_release(c.backend.wgpu.cmd_buffer);
+            c.backend.wgpu.cmd_buffer = .none;
+        }
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        std.debug.assert(options.webgl != null);
+        for (options.webgl.?.cmds) |c| {
+            rhi.webgl.command_list.replay(&c.backend.webgl.recorder, device);
+        }
+        return;
+    }
     unreachable;
 }
 
@@ -62,6 +103,17 @@ pub fn wait_queue_idle(self: *Queue, device: *rhi.Device) !void {
         // On Metal, ordering/completion is tracked per command buffer (the
         // command ring waits on the last submitted buffer). A device-wide
         // queue wait is a no-op here.
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // A browser frame cannot block on the GPU at all. Callers use this at
+        // shutdown to make teardown safe; the browser already keeps submitted
+        // resources alive until their work retires, so there is nothing to do.
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        // Unlike WebGPU, GL does expose a real flush-and-wait.
+        rhi.webgl.gl_finish();
         return;
     }
     unreachable;

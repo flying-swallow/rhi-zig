@@ -28,6 +28,11 @@ backend: union(rhi.Backend) {
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
     mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    // Descriptors and descriptor sets are outside the WebGPU backend's scope:
+    // render pipelines use `layout: "auto"` and the only binding the examples
+    // need is the push-constant uniform the pipeline owns itself.
+    wgpu: if (rhi.platform_has_api(.wgpu)) void else void,
+    webgl: if (rhi.platform_has_api(.webgl)) void else void,
 } = undefined,
 
 pub fn isEmpty(self: Descriptor) bool {

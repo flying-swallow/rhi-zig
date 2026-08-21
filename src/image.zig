@@ -24,6 +24,22 @@ backend: union {
     mtl: rhi.wrapper_platform_type(.mtl, struct {
         texture: rhi.metal.mtl.Texture,
     }),
+    wgpu: rhi.wrapper_platform_type(.wgpu, struct {
+        texture: rhi.webgpu.Handle = .none,
+        format: rhi.Format = .unknown,
+        /// A canvas texture is owned by the browser and must not be released by
+        /// us; textures we created must.
+        owned: bool = true,
+    }),
+    webgl: rhi.wrapper_platform_type(.webgl, struct {
+        texture: rhi.webgl.Handle = .none,
+        format: rhi.Format = .unknown,
+        width: u32 = 0,
+        height: u32 = 0,
+        /// The swapchain's colour texture is owned by the swapchain, so a
+        /// by-value copy handed out by `Swapchain.image` must not free it.
+        owned: bool = true,
+    }),
 },
 
 /// An unset / not-yet-created image (cookie 0).
@@ -159,6 +175,76 @@ pub fn init(
         const texture = device.backend.mtl.device.newTexture(desc) orelse return error.MetalTextureFailed;
         return .{ .cookie = rhi.next_cookie(), .backend = .{ .mtl = .{ .texture = texture } } };
     }
+    if (rhi.is_target_selected(.webgl)) {
+        const webgl = rhi.webgl;
+        // WebGL2 has no storage images, no VRS, no transient attachments, and
+        // no subpass inputs.
+        if (options.usage.storage or options.usage.shading_rate or
+            options.usage.transient_attachment or options.usage.input_attachment)
+            return error.UnsupportedBackend;
+        if (options.samples != .@"1") return error.UnsupportedBackend;
+        if (options.image_type != .type_2d) return error.UnsupportedBackend;
+        if (options.array_layers != 1) return error.UnsupportedBackend;
+
+        const fmt = try webgl.to_gl_format(options.format);
+        const texture = webgl.gl_create_texture_2d(fmt.internal_format, options.width, options.height, options.mip_levels);
+        if (texture.isNone()) return error.WebGL2TextureCreationFailed;
+        return .{
+            .cookie = rhi.next_cookie(),
+            .backend = .{ .webgl = .{
+                .texture = texture,
+                .format = options.format,
+                .width = options.width,
+                .height = options.height,
+                .owned = true,
+            } },
+        };
+    }
+    if (rhi.is_target_selected(.wgpu)) {
+        const wgpu = rhi.webgpu;
+        const format = try wgpu.to_wgpu_texture_format(options.format);
+
+        var usage: u32 = 0;
+        if (options.usage.transfer_src) usage |= wgpu.TextureUsage.copy_src;
+        if (options.usage.transfer_dst) usage |= wgpu.TextureUsage.copy_dst;
+        if (options.usage.sampled) usage |= wgpu.TextureUsage.texture_binding;
+        if (options.usage.storage) usage |= wgpu.TextureUsage.storage_binding;
+        if (options.usage.color_attachment or options.usage.depth_stencil_attachment)
+            usage |= wgpu.TextureUsage.render_attachment;
+
+        // WebGPU has no variable-rate shading, no transient (memoryless)
+        // attachments, and no subpass input attachments, so a texture asking for
+        // one of those cannot be created faithfully.
+        if (options.usage.shading_rate or options.usage.transient_attachment or options.usage.input_attachment)
+            return error.UnsupportedBackend;
+        // Multisampled textures need a resolve path the backend does not have yet.
+        if (options.samples != .@"1") return error.UnsupportedBackend;
+
+        const dimension: wgpu.TextureDimension = switch (options.image_type) {
+            .type_1d => .@"1d",
+            .type_2d => .@"2d",
+            .type_3d => .@"3d",
+        };
+        // WebGPU folds array layers and depth into one `depthOrArrayLayers`.
+        const depth_or_layers: u32 = if (options.image_type == .type_3d) options.depth else options.array_layers;
+
+        const texture = wgpu.wgpu_device_create_texture(
+            device.backend.wgpu.device,
+            format,
+            options.width,
+            options.height,
+            depth_or_layers,
+            options.mip_levels,
+            1,
+            dimension,
+            usage,
+        );
+        if (texture.isNone()) return error.WebGPUTextureCreationFailed;
+        return .{
+            .cookie = rhi.next_cookie(),
+            .backend = .{ .wgpu = .{ .texture = texture, .format = options.format, .owned = true } },
+        };
+    }
     return error.UnsupportedBackend;
 }
 
@@ -178,6 +264,23 @@ pub fn deinit(self: *Image, device: *rhi.Device) void {
     }
     if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
         self.backend.mtl.texture.release();
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        if (self.backend.webgl.owned) {
+            // FBOs referencing this texture must go with it; GL reuses handles.
+            device.backend.webgl.fbo_cache.invalidate(self.cookie);
+            rhi.webgl.gl_delete_texture(self.backend.webgl.texture);
+        }
+        self.backend.webgl.texture = .none;
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // A canvas texture belongs to the browser and is invalidated at the end
+        // of the frame that acquired it; releasing it here would drop a handle
+        // we never owned.
+        if (self.backend.wgpu.owned) rhi.webgpu.wgpu_release(self.backend.wgpu.texture);
+        self.backend.wgpu.texture = .none;
         return;
     }
     unreachable;
