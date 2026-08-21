@@ -18,9 +18,10 @@ pub fn AppContext(comptime Context: type) type {
 pub fn sdl_window_handle_to_rhi_window_handle(window: *sdl.SDL_Window) !rhi.WindowHandle {
     // zig fmt: off
     if (builtin.os.tag == .windows) {
-        return rhi.WindowHandle{ .win32 = .{
-            .hinstance = sdl.SDL_GetPointerProperty(sdl.SDL_GetWindowProperties(window), sdl.SDL_PROP_WINDOW_WIN32_HINSTANCE_POINTER, null).?,
-            .hwnd = sdl.SDL_GetPointerProperty(sdl.SDL_GetWindowProperties(window), sdl.SDL_PROP_WINDOW_WIN32_HWND_POINTER, null).?,
+        const props = sdl.SDL_GetWindowProperties(window);
+        return rhi.WindowHandle{ .windows = .{
+            .hinstance = sdl.SDL_GetPointerProperty(props, "SDL.window.win32.hinstance", null),
+            .hwnd = sdl.SDL_GetPointerProperty(props, "SDL.window.win32.hwnd", null),
         } };
     } else if (builtin.os.tag == .linux) {
         if (std.mem.eql(u8, std.mem.sliceTo(sdl.SDL_GetCurrentVideoDriver(), 0), "x11")) {

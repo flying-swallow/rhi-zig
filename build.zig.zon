@@ -15,11 +15,6 @@
         // glfw_zig/wayland_zig/toolbox chain that isn't needed off Windows and
         // breaks on newer zig nightlies (toolbox uses the deleted
         // std.Uri.getHostAlloc).
-        .zwindows = .{
-            .url = "git+https://github.com/flying-swallow/zwindows.git#a0bcb1ddf17fc4d458dff849a895644931a921df",
-            .hash = "zwindows-0.3.0-dev-xMZ1u0OlEgBe5N8_vygzx_IOFwrKSJRkQvtjOyU4Qg60",
-            .lazy = true,
-        },
         .vulkan_headers = .{
             .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
             .hash = "N-V-__8AAAkkoQGn5z1yoNVrwqZfnYmZp8AZ5CJgoHRMQI0c",
@@ -31,6 +26,11 @@
         .cimgui_zig = .{
             .url = "git+https://github.com/flying-swallow/cimgui.zig.git#4a85aa3a7c7bd825ad5e9b54fa531ca0cb70f3e0",
             .hash = "cimgui_zig-1.0.0-2XubkqQ3wgDetMzfITqi4Sjb5Ny8_u5-W-8TZgB8L2_5",
+            .lazy = true,
+        },
+        .zwindows = .{
+            .url = "git+https://github.com/flying-swallow/zwindows.git#e18dccfd71a5257fb39bb229029af1f5ceb6a9fe",
+            .hash = "zwindows-0.3.0-dev-xMZ1u6H2IQCDBcoXjNRz3IycpYwrQ5XD8vDSZsEEmTT8",
             .lazy = true,
         },
     },

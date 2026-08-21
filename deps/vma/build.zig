@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
     translate_c.addIncludePath(upstream.path("include"));
     if (vulkan_registery) |vk| {
         translate_c.addIncludePath(vk.path(b, "include"));
+        translate_c.addIncludePath(vk);
     }
     const c_module = translate_c.createModule();
 
@@ -32,6 +33,7 @@ pub fn build(b: *std.Build) void {
     root_module.addIncludePath(upstream.path("include"));
     if (vulkan_registery) |vk| {
         root_module.addIncludePath(vk.path(b, "include"));
+        root_module.addIncludePath(vk);
     }
     const lib = b.addLibrary(.{
         .name = "vma",
