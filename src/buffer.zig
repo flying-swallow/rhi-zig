@@ -46,6 +46,9 @@ backend: union {
     // `gl_buffer_sub_data` in place of `queueWriteBuffer`.
     webgl: if (rhi.platform_has_api(.webgl)) struct {
         buffer: rhi.webgl.Handle = .none,
+        /// Fixed at creation: WebGL2 locks a buffer to its first bind target,
+        /// so every later bind must use this one.
+        target: u32 = 0,
         shadow: ?[]u8 = null,
         allocator: ?std.mem.Allocator = null,
         size: u32 = 0,
@@ -225,7 +228,13 @@ pub fn init_general(
         if (options.size > std.math.maxInt(u32)) return error.BufferTooLarge;
         const size: u32 = @intCast(options.size);
         const usage: u32 = if (options.persistant_map) webgl.gl.DYNAMIC_DRAW else webgl.gl.STATIC_DRAW;
-        const buf = webgl.gl_create_buffer(size, usage);
+        // The target is part of the buffer's identity here, not a per-call
+        // choice, so it comes from what the caller said the buffer is for.
+        const target: u32 = if (options.usage.index_buffer)
+            webgl.gl.ELEMENT_ARRAY_BUFFER
+        else
+            webgl.gl.ARRAY_BUFFER;
+        const buf = webgl.gl_create_buffer(target, size, usage);
         if (buf.isNone()) return error.WebGL2BufferCreationFailed;
 
         // Same shadow arrangement as the WebGPU arm: GL has no persistent host
@@ -243,6 +252,7 @@ pub fn init_general(
             .cookie = rhi.next_cookie(),
             .backend = .{ .webgl = .{
                 .buffer = buf,
+                .target = target,
                 .shadow = shadow,
                 .allocator = device.backend.webgl.allocator,
                 .size = size,
@@ -333,7 +343,7 @@ pub fn flush(self: *Buffer, device: *rhi.Device) void {
     }
     if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
         const shadow = self.backend.webgl.shadow orelse return;
-        rhi.webgl.gl_buffer_sub_data(self.backend.webgl.buffer, 0, shadow.ptr, @intCast(shadow.len));
+        rhi.webgl.gl_buffer_sub_data(self.backend.webgl.target, self.backend.webgl.buffer, 0, shadow.ptr, @intCast(shadow.len));
         if (self.backend.webgl.allocator) |a| a.free(shadow);
         self.backend.webgl.shadow = null;
         self.mapped_region = null;

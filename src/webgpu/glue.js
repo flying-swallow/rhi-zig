@@ -18,9 +18,11 @@
 
 // --- Enum tables (order must match src/webgpu.zig) -------------------------
 
-// Installed side by side with this file (see build.zig), not as a sibling
-// directory, so the import is flat.
-import { makeWebglImports } from "./webgl_glue.js";
+// Must equal `rhi.glue_abi_version` in src/root.zig. The browser caches this
+// file and the .wasm independently, so a stale glue can be paired with a fresh
+// module; JS would then silently shift every import argument rather than fail.
+// `zig build test` checks the two constants agree.
+const GLUE_ABI_VERSION = 1;
 
 const TEXTURE_FORMAT = [
   "r8unorm", "r8snorm", "r8uint", "r8sint",
@@ -107,6 +109,18 @@ function drop(id) {
  */
 export async function boot(wasmUrl, options = {}) {
   const canvasSelector = options.canvas ?? "#canvas";
+  // Cache busting: the generated page passes the build's token, and every
+  // asset this module pulls in carries it too. Without that, the browser
+  // caches `glue.js`, `webgl_glue.js` and the `.wasm` independently and can
+  // pair an old one with a new one — which shifts every import argument and
+  // renders nothing, with no error until the ABI check below.
+  //
+  // The WebGL2 half is imported dynamically for the same reason: a static
+  // `import` cannot carry a per-build token. It is always loaded, even on the
+  // WebGPU path, because instantiation fails unless every declared import is
+  // supplied.
+  const assetVersion = options.assetVersion ? `?v=${options.assetVersion}` : "";
+  const { makeWebglImports } = await import(`./webgl_glue.js${assetVersion}`);
   const canvasEl = document.querySelector(canvasSelector);
   if (!canvasEl) throw new Error(`no element matches canvas selector ${canvasSelector}`);
 
@@ -185,6 +199,16 @@ export async function boot(wasmUrl, options = {}) {
   const { instance } = await WebAssembly.instantiateStreaming(response, imports);
   wasm.memory = instance.exports.memory;
   wasm.exports = instance.exports;
+
+  // Catch a cached-glue/fresh-wasm pairing before anything is called with
+  // mismatched arguments.
+  const moduleAbi = instance.exports.rhi_glue_abi_version?.();
+  if (moduleAbi !== undefined && moduleAbi !== GLUE_ABI_VERSION) {
+    throw new Error(
+      `glue.js is version ${GLUE_ABI_VERSION} but ${wasmUrl} was built for version ${moduleAbi}. ` +
+      `This is almost always a stale browser cache — reload with cache disabled (Ctrl+Shift+R).`,
+    );
+  }
 
   const canvas = canvasEl;
 

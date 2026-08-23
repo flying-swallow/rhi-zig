@@ -117,6 +117,20 @@ pub const GpuScope = gpu_profiler.GpuScope;
 /// Every other target keeps the atomic counter.
 var cookie_counter: if (is_web) u64 else std.atomic.Value(u64) = if (is_web) 1 else .init(1);
 
+/// Version of the contract between the wasm module and the JS glue.
+///
+/// The two halves are separate files that a browser caches separately, so a
+/// stale `glue.js` can end up paired with a fresh `.wasm`. Nothing about that
+/// fails loudly on its own: JS ignores extra arguments and fills missing ones
+/// with `undefined`, so a changed import signature silently shifts every
+/// argument and the page renders garbage or nothing at all.
+///
+/// **Bump this whenever an `extern` signature in `webgpu.zig` or `webgl.zig`
+/// changes**, and bump `GLUE_ABI_VERSION` in `src/webgpu/glue.js` to match. The
+/// glue refuses to boot on a mismatch, and `zig build test` checks the two
+/// constants agree.
+pub const glue_abi_version: u32 = 1;
+
 pub fn next_cookie() u64 {
     if (comptime is_web) {
         const v = cookie_counter;

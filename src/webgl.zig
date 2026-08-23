@@ -247,10 +247,14 @@ pub extern "webgl" fn gl_renderer_name(buf_ptr: [*]u8, buf_len: u32) u32;
 pub extern "webgl" fn gl_get_parameter_int(pname: u32) i32;
 
 // Buffers
-pub extern "webgl" fn gl_create_buffer(size: u32, usage: u32) Handle;
+/// `target` is fixed for the buffer's lifetime. WebGL2 locks a buffer to the
+/// first target it is bound to — Chrome enforces that even for a
+/// `COPY_WRITE_BUFFER` bind — so it is derived from the RHI usage flags at
+/// creation and reused for every later bind.
+pub extern "webgl" fn gl_create_buffer(target: u32, size: u32, usage: u32) Handle;
 pub extern "webgl" fn gl_delete_buffer(buffer: Handle) void;
-pub extern "webgl" fn gl_buffer_sub_data(buffer: Handle, offset: u32, ptr: [*]const u8, len: u32) void;
-pub extern "webgl" fn gl_copy_buffer_sub_data(src: Handle, src_offset: u32, dst: Handle, dst_offset: u32, size: u32) void;
+pub extern "webgl" fn gl_buffer_sub_data(target: u32, buffer: Handle, offset: u32, ptr: [*]const u8, len: u32) void;
+pub extern "webgl" fn gl_copy_buffer_sub_data(src_target: u32, src: Handle, src_offset: u32, dst_target: u32, dst: Handle, dst_offset: u32, size: u32) void;
 
 // Textures and framebuffers
 pub extern "webgl" fn gl_create_texture_2d(internal_format: u32, width: u32, height: u32, levels: u32) Handle;

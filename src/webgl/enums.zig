@@ -249,6 +249,22 @@ test "webgl: glue.js GL constants match the Zig values" {
     try expectConst(js, "CCW", gl.CCW);
 }
 
+test "glue.js ABI version matches rhi.glue_abi_version" {
+    // The wasm module and the glue are cached separately by the browser, so a
+    // mismatch is a real and silent failure mode; the boot-time check only
+    // helps if these two constants are kept in step.
+    const js = @embedFile("../webgpu/glue.js");
+    var buf: [64]u8 = undefined;
+    const needle = try std.fmt.bufPrint(&buf, "const GLUE_ABI_VERSION = {d};", .{rhi.glue_abi_version});
+    if (std.mem.indexOf(u8, js, needle) == null) {
+        std.debug.print(
+            "src/webgpu/glue.js does not declare `{s}` — bump it alongside rhi.glue_abi_version\n",
+            .{needle},
+        );
+        return error.GlueAbiVersionMismatch;
+    }
+}
+
 test "webgl: format mapping covers what the examples need" {
     // 02_mesh's depth target and the swapchain colour format.
     try std.testing.expectEqual(gl.DEPTH_COMPONENT32F, (try to_gl_format(.d32_sfloat)).internal_format);

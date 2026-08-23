@@ -138,6 +138,13 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 color: rhi.webgl.Handle = .none,
                 fbo: rhi.webgl.Handle = .none,
                 format: rhi.Format = .rgba8_unorm,
+                /// Identity for the view this swapchain hands out, and so the
+                /// key its cached framebuffers live under. Allocated per
+                /// swapchain rather than derived from the GL texture handle:
+                /// GL reuses handle numbers, so a swapchain recreated after the
+                /// old one was released could otherwise inherit its cache
+                /// entries and render into a deleted texture.
+                view_cookie: u64 = 0,
             } else void,
         },
 
@@ -233,9 +240,7 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                     } },
                     // Stable across frames, unlike the WebGPU arm's per-frame
                     // canvas texture, so the FBO cache keyed on it stays warm.
-                    // Offset into the high half so it cannot collide with a
-                    // cookie handed out by `rhi.next_cookie`.
-                    .cookie = @as(u64, @intFromEnum(self.backend.webgl.color)) | (1 << 32),
+                    .cookie = self.backend.webgl.view_cookie,
                 };
             }
             unreachable;
@@ -294,10 +299,15 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 return;
             }
             if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                // Drop the render-pass framebuffers built against this
+                // swapchain's view before the texture goes away, or a later
+                // swapchain could find them and draw into a deleted target.
+                device.backend.webgl.fbo_cache.invalidate(self.backend.webgl.view_cookie);
                 rhi.webgl.gl_delete_framebuffer(self.backend.webgl.fbo);
                 rhi.webgl.gl_delete_texture(self.backend.webgl.color);
                 self.backend.webgl.fbo = .none;
                 self.backend.webgl.color = .none;
+                self.backend.webgl.view_cookie = 0;
                 return;
             }
             if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
@@ -537,7 +547,12 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                     .image_count = 1,
                     .width = desc.width,
                     .height = desc.height,
-                    .backend = .{ .webgl = .{ .color = color, .fbo = fbo, .format = format } },
+                    .backend = .{ .webgl = .{
+                        .color = color,
+                        .fbo = fbo,
+                        .format = format,
+                        .view_cookie = rhi.next_cookie(),
+                    } },
                 };
             }
             if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {

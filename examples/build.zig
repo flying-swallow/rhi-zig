@@ -43,6 +43,7 @@ pub fn build(b: *std.Build) !void {
     // index.html rather than an executable.
     const is_web = target.result.cpu.arch.isWasm();
 
+
     // SDL is a lazy dependency so the workspace can build without compiling
     // SDL's transitive build graph. The web build has no use for it.
     const sdl_dep = if (is_web) null else b.lazyDependency("sdl", .{
@@ -249,12 +250,25 @@ pub fn build(b: *std.Build) !void {
 }
 
 /// Writes the page that loads one example's .wasm through the WebGPU glue.
+///
+/// The page appends a fresh token to every asset URL it loads, so a rebuild is
+/// never served from a stale browser cache. `glue.js`, `webgl_glue.js` and the
+/// `.wasm` are cached independently — and an ES module import far more
+/// stubbornly than a `fetch` — so an old glue can otherwise be paired with a
+/// new module, which shifts every import argument and renders nothing.
+///
+/// The token is generated per page load rather than per build. A build-time
+/// hash would be tidier, but Zig caches the configure phase, so a token
+/// computed there stays frozen until `build.zig` itself changes — exactly when
+/// it is least likely to help. These are development pages, so never caching
+/// them is the right trade; a real deployment should use content hashes.
 fn webPage(b: *std.Build, name: []const u8) std.Build.LazyPath {
     const html = b.fmt(
         \\<!doctype html>
         \\<html lang="en">
         \\<head>
         \\<meta charset="utf-8">
+        \\<meta http-equiv="cache-control" content="no-store">
         \\<title>rhi-zig — {s}</title>
         \\<style>
         \\  html, body {{ margin: 0; height: 100%; background: #111; color: #ddd;
@@ -268,10 +282,11 @@ fn webPage(b: *std.Build, name: []const u8) std.Build.LazyPath {
         \\<canvas id="canvas"></canvas>
         \\<div id="err"></div>
         \\<script type="module">
-        \\import {{ boot }} from "./glue.js";
+        \\const v = Date.now();
+        \\const {{ boot }} = await import(`./glue.js?v=${{v}}`);
         \\// WebGPU needs a secure context, so this must be served over http(s)
         \\// rather than opened as a file:// URL. localhost counts as secure.
-        \\boot("./{s}.wasm", {{ canvas: "#canvas" }}).catch((e) => {{
+        \\boot(`./{s}.wasm?v=${{v}}`, {{ canvas: "#canvas", assetVersion: String(v) }}).catch((e) => {{
         \\  const el = document.getElementById("err");
         \\  el.style.display = "grid";
         \\  el.textContent = String(e && e.message ? e.message : e);

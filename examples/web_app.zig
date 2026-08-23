@@ -139,6 +139,12 @@ pub fn Application(comptime Context: type, handlers: struct {
         /// so the symbols are emitted. `export` inside a generic type only
         /// reaches the binary if the namespace is referenced.
         pub const web_exports = struct {
+            /// Lets the glue detect that it is a different vintage than this
+            /// module before it calls anything. See `rhi.glue_abi_version`.
+            export fn rhi_glue_abi_version() u32 {
+                return rhi.glue_abi_version;
+            }
+
             /// Gives the glue a scratch pointer to write the canvas selector
             /// into. `len` is bounded by `selector_storage`.
             export fn rhi_web_alloc(len: u32) [*]u8 {

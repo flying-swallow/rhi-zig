@@ -55,13 +55,10 @@ to exercise the fallback on a machine where WebGPU works.
 ```sh
 # Build the library for the web
 zig build -Dtarget=wasm32-freestanding
-
-# Build the web examples (emits <name>.wasm, <name>.html, and glue.js)
-cd examples && zig build -Dtarget=wasm32-freestanding
-
-# WebGPU needs a secure context, so serve the output rather than opening file://
-cd zig-out/bin && python3 -m http.server 8000   # then open http://localhost:8000/00_clear.html
 ```
+
+To build and run the examples in a browser, see
+[Running the examples](#running-the-examples).
 
 The glue requests the `GPUAdapter` and `GPUDevice` *before* instantiating the wasm module, which
 is what keeps the synchronous `Renderer.init` -> `enumerate_adapters` -> `Device.init` chain
@@ -133,23 +130,31 @@ Useful build options:
 
 ## Running the examples
 
-The examples are standalone SDL3-hosted apps under `examples/`, each registered as a named run
-step:
+The examples live under [`examples/`](examples/), which is a **separate build root** — run these
+from that directory, not the repository root.
+
+| Step        | Source         | Demonstrates                                                             | Backends                       |
+| ----------- | -------------- | ------------------------------------------------------------------------ | ------------------------------ |
+| `00_clear`  | `00Clear.zig`  | Swapchain clear with image barriers, plus sub-rect quadrant clears.      | Vulkan, Metal, WebGPU, WebGL2  |
+| `01_shader` | `01Shader.zig` | Fullscreen shader (Mandelbrot).                                          | Vulkan, Metal, WebGPU, WebGL2  |
+| `02_mesh`   | `02Mesh.zig`   | Rotating cube: vertex + index buffers, depth, push constants.            | Vulkan, Metal, WebGPU, WebGL2  |
+| `03_imgui`  | `03Imgui.zig`  | Dear ImGui UI drawn through `rhi.imgui`.                                 | Vulkan                         |
+| `04_svt`    | `04SVT.zig`    | Software virtual texturing on the `rpi` layer.                           | Vulkan                         |
 
 ```sh
 cd examples
+
+# Natively: build and run in one step
 zig build 00_clear      # or 01_shader, 02_mesh, 03_imgui, 04_svt
+
+# In a browser (examples 00-02): build, then serve — a secure context is
+# required, so file:// will not work and localhost counts as secure
+zig build -Dtarget=wasm32-freestanding
+cd zig-out/bin && python3 -m http.server 8000   # open http://localhost:8000/00_clear.html
 ```
 
-| Step        | Source          | Demonstrates                                                             | Backends       |
-| ----------- | --------------- | ----------------------------------------------------------------------- | -------------- |
-| `00_clear`  | `00Clear.zig`   | Minimal swapchain clear with image barriers.                            | Vulkan, Metal  |
-| `01_shader` | `01Shader.zig`  | Fullscreen shader (Mandelbrot); Slang → SPIR-V/MSL per backend.         | Vulkan, Metal  |
-| `02_mesh`   | `02Mesh.zig`    | Mesh rendering with push constants (`bunny.obj`).                       | Vulkan, Metal  |
-| `03_imgui`  | `03Imgui.zig`   | Dear ImGui UI drawn through `rhi.imgui`.                                | Vulkan         |
-| `04_svt`    | `04SVT.zig`     | Software virtual texturing on the `rpi` layer (feedback pass → CPU tile streaming → composite). | Vulkan |
-
-Examples `00`–`02` also build for the web; see [WebGPU / web builds](#webgpu--web-builds).
+See [`examples/README.md`](examples/README.md) for build flags, how shaders are compiled per
+backend, picking a specific web backend, and what to do when a page comes up blank.
 
 ## Quick start
 

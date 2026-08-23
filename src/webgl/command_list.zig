@@ -175,8 +175,10 @@ pub fn replay(recorder: *const Recorder, device: *rhi.Device) void {
         },
         .copy_buffer => |c| {
             webgl.gl_copy_buffer_sub_data(
+                c.src.backend.webgl.target,
                 c.src.backend.webgl.buffer,
                 c.src_offset,
+                c.dst.backend.webgl.target,
                 c.dst.backend.webgl.buffer,
                 c.dst_offset,
                 c.size,

@@ -77,35 +77,40 @@ export function makeWebglImports(ctx) {
     },
 
     // -- Buffers -----------------------------------------------------------
-    gl_create_buffer: (size, usage) => {
+    gl_create_buffer: (target, size, usage) => {
       const b = gl.createBuffer();
-      // COPY_WRITE_BUFFER, not ARRAY_BUFFER: WebGL2 locks a buffer to the first
-      // target it is bound to, and binding it to a second one afterwards is an
-      // INVALID_OPERATION. Allocating through ARRAY_BUFFER would therefore make
-      // every index buffer fail at its first ELEMENT_ARRAY_BUFFER bind. The
-      // COPY_* targets are exempt from that rule precisely for this case.
+      // WebGL2 locks a buffer to the first target it is bound to, and binding
+      // it to a different one afterwards is an INVALID_OPERATION. Chrome
+      // applies that even to a COPY_WRITE_BUFFER bind, so the target cannot be
+      // left until first use — it is decided once, from the RHI usage flags,
+      // and every later bind uses the same one.
       //
       // Size is reserved up front so later sub-data writes never reallocate,
       // which would invalidate any VAO already referencing this buffer.
-      gl.bindBuffer(gl.COPY_WRITE_BUFFER, b);
-      gl.bufferData(gl.COPY_WRITE_BUFFER, size, usage || gl.STATIC_DRAW);
-      gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+      gl.bindBuffer(target, b);
+      gl.bufferData(target, size, usage || gl.STATIC_DRAW);
+      gl.bindBuffer(target, null);
       return put(b);
     },
     gl_delete_buffer: (h) => { const b = get(h); if (b) gl.deleteBuffer(b); drop(h); },
-    gl_buffer_sub_data: (h, offset, ptr, len) => {
-      // COPY_WRITE_BUFFER for the same reason as gl_create_buffer: uploading
-      // must not decide what kind of buffer this is.
-      gl.bindBuffer(gl.COPY_WRITE_BUFFER, get(h));
-      gl.bufferSubData(gl.COPY_WRITE_BUFFER, offset, bytes(ptr, len));
-      gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+    gl_buffer_sub_data: (target, h, offset, ptr, len) => {
+      // Same target the buffer was created with; see gl_create_buffer.
+      gl.bindBuffer(target, get(h));
+      gl.bufferSubData(target, offset, bytes(ptr, len));
+      gl.bindBuffer(target, null);
     },
-    gl_copy_buffer_sub_data: (src, srcOff, dst, dstOff, size) => {
-      gl.bindBuffer(gl.COPY_READ_BUFFER, get(src));
-      gl.bindBuffer(gl.COPY_WRITE_BUFFER, get(dst));
-      gl.copyBufferSubData(gl.COPY_READ_BUFFER, gl.COPY_WRITE_BUFFER, srcOff, dstOff, size);
-      gl.bindBuffer(gl.COPY_READ_BUFFER, null);
-      gl.bindBuffer(gl.COPY_WRITE_BUFFER, null);
+    gl_copy_buffer_sub_data: (srcTarget, src, srcOff, dstTarget, dst, dstOff, size) => {
+      // Each buffer is bound to its own creation target rather than to
+      // COPY_READ/COPY_WRITE, for the type-locking reason in gl_create_buffer.
+      // copyBufferSubData needs two distinct binding points, so a copy between
+      // two buffers of the same kind borrows COPY_READ for the source — which
+      // is safe only because that buffer already has a type.
+      const read = srcTarget === dstTarget ? gl.COPY_READ_BUFFER : srcTarget;
+      gl.bindBuffer(read, get(src));
+      gl.bindBuffer(dstTarget, get(dst));
+      gl.copyBufferSubData(read, dstTarget, srcOff, dstOff, size);
+      gl.bindBuffer(read, null);
+      gl.bindBuffer(dstTarget, null);
     },
 
     // -- Textures and framebuffers ----------------------------------------
