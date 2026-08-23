@@ -12,6 +12,11 @@ backend: union {
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
     mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    // A browser frame cannot block on the GPU, and the browser keeps submitted
+    // resources alive on its own, so a fence has nothing to carry and nothing
+    // to wait on. Same reasoning as the Metal arm.
+    wgpu: if (rhi.platform_has_api(.wgpu)) void else void,
+    webgl: if (rhi.platform_has_api(.webgl)) void else void,
 } = undefined,
 
 pub const FenceStatus = enum {
@@ -45,6 +50,12 @@ pub fn init(device: *rhi.Device, signaled: bool) !Fence {
             .fence = fence,
         } } };
     } else if (rhi.is_target_selected(.dx12)) {} else if (rhi.is_target_selected(.mtl)) {}
+    if (rhi.is_target_selected(.webgl)) {
+        // A browser frame cannot block on the GPU, and GL keeps deleted objects
+        // alive until the commands referencing them retire, so a fence has
+        // nothing to carry. Same reasoning as the WebGPU and Metal arms.
+        return .{ .backend = .{ .webgl = {} } };
+    }
     return error.UnsupportedBackend;
 }
 

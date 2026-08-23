@@ -31,6 +31,25 @@ backend: union {
     mtl: if (rhi.platform_has_api(.mtl)) struct {
         buffer: rhi.metal.mtl.Buffer,
     } else void,
+    // A WebGPU mapped range is a JS ArrayBuffer, not wasm linear memory, so it
+    // cannot be handed to Zig as a `[]u8`. `mapped_region` instead points at a
+    // shadow allocation in wasm memory which is flushed to the GPU buffer with
+    // `queueWriteBuffer` on first use; see `flush_mapped`.
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+        buffer: rhi.webgpu.Handle = .none,
+        shadow: ?[]u8 = null,
+        allocator: ?std.mem.Allocator = null,
+        size: u32 = 0,
+    } else void,
+    // Same wasm-memory shadow as the WebGPU arm — GL's `bufferSubData` takes a
+    // view into linear memory, so the shape carries over verbatim with
+    // `gl_buffer_sub_data` in place of `queueWriteBuffer`.
+    webgl: if (rhi.platform_has_api(.webgl)) struct {
+        buffer: rhi.webgl.Handle = .none,
+        shadow: ?[]u8 = null,
+        allocator: ?std.mem.Allocator = null,
+        size: u32 = 0,
+    } else void,
 } = undefined,
 
 //  General buffer initialization function
@@ -134,6 +153,103 @@ pub fn init_general(
                 null,
         };
     }
+    if (rhi.is_target_selected(.wgpu)) {
+        const wgpu = rhi.webgpu;
+        var usage: u32 = 0;
+        if (options.usage.transfer_src) usage |= wgpu.BufferUsage.copy_src;
+        // COPY_DST is also what makes `queueWriteBuffer` legal, which is how a
+        // host-written buffer's shadow reaches the GPU.
+        if (options.usage.transfer_dst or options.persistant_map) usage |= wgpu.BufferUsage.copy_dst;
+        if (options.usage.vertex_buffer) usage |= wgpu.BufferUsage.vertex;
+        if (options.usage.index_buffer) usage |= wgpu.BufferUsage.index;
+        if (options.usage.constant_buffer) usage |= wgpu.BufferUsage.uniform;
+        if (options.usage.indirect or options.usage.argument_buffer) usage |= wgpu.BufferUsage.indirect;
+        if (options.usage.shader_resource or options.usage.shader_resource_storage or
+            options.usage.scratch_buffer or options.stride > 0) usage |= wgpu.BufferUsage.storage;
+
+        // Ray tracing has no WebGPU equivalent; a buffer asking for it would be
+        // silently mis-created, so report it instead.
+        if (options.usage.shader_binding_table or
+            options.usage.acceleration_structure_build_input or
+            options.usage.acceleration_structure_storage or
+            options.usage.micromap_build_input or
+            options.usage.micromap_storage) return error.UnsupportedBackend;
+
+        // WebGPU sizes are u64 in the spec, but a `u64` argument would become a
+        // JS BigInt at the wasm boundary and no browser-resident buffer comes
+        // near 4 GiB.
+        if (options.size > std.math.maxInt(u32)) return error.BufferTooLarge;
+        const size: u32 = @intCast(options.size);
+        // WebGPU requires buffer sizes be a multiple of 4.
+        const aligned_size = std.mem.alignForward(u32, size, 4);
+
+        const buf = wgpu.wgpu_device_create_buffer(device.backend.wgpu.device, aligned_size, usage);
+        if (buf.isNone()) return error.WebGPUBufferCreationFailed;
+
+        // A WebGPU mapped range is a JS ArrayBuffer, not wasm linear memory, so
+        // it cannot be handed back as a `[]u8`. Persistently-mapped buffers get
+        // a shadow allocation in wasm memory instead; `flush` pushes it across
+        // with `queueWriteBuffer` the first time the buffer is used.
+        var shadow: ?[]u8 = null;
+        if (options.persistant_map) {
+            shadow = device.backend.wgpu.allocator.alloc(u8, size) catch {
+                wgpu.wgpu_release(buf);
+                return error.OutOfMemory;
+            };
+            @memset(shadow.?, 0);
+        }
+        return .{
+            .cookie = rhi.next_cookie(),
+            .backend = .{ .wgpu = .{
+                .buffer = buf,
+                .shadow = shadow,
+                .allocator = device.backend.wgpu.allocator,
+                .size = size,
+            } },
+            .mapped_region = shadow,
+        };
+    }
+    if (rhi.is_target_selected(.webgl)) {
+        const webgl = rhi.webgl;
+        // Ray tracing has no GL equivalent, same as on WebGPU.
+        if (options.usage.shader_binding_table or
+            options.usage.acceleration_structure_build_input or
+            options.usage.acceleration_structure_storage or
+            options.usage.micromap_build_input or
+            options.usage.micromap_storage) return error.UnsupportedBackend;
+        // WebGL2 (ES 3.0) has no shader storage buffers.
+        if (options.usage.shader_resource_storage or options.usage.scratch_buffer) return error.UnsupportedBackend;
+        // Nor indirect draws.
+        if (options.usage.indirect or options.usage.argument_buffer) return error.UnsupportedBackend;
+
+        if (options.size > std.math.maxInt(u32)) return error.BufferTooLarge;
+        const size: u32 = @intCast(options.size);
+        const usage: u32 = if (options.persistant_map) webgl.gl.DYNAMIC_DRAW else webgl.gl.STATIC_DRAW;
+        const buf = webgl.gl_create_buffer(size, usage);
+        if (buf.isNone()) return error.WebGL2BufferCreationFailed;
+
+        // Same shadow arrangement as the WebGPU arm: GL has no persistent host
+        // mapping either, so `mapped_region` is wasm memory flushed on first
+        // use with `bufferSubData`.
+        var shadow: ?[]u8 = null;
+        if (options.persistant_map) {
+            shadow = device.backend.webgl.allocator.alloc(u8, size) catch {
+                webgl.gl_delete_buffer(buf);
+                return error.OutOfMemory;
+            };
+            @memset(shadow.?, 0);
+        }
+        return .{
+            .cookie = rhi.next_cookie(),
+            .backend = .{ .webgl = .{
+                .buffer = buf,
+                .shadow = shadow,
+                .allocator = device.backend.webgl.allocator,
+                .size = size,
+            } },
+            .mapped_region = shadow,
+        };
+    }
     if (rhi.is_target_selected(.mtl)) {
         // Shared storage: the buffer is CPU-visible, so `mapped_region` points
         // straight at its contents (no staging/blit needed on Apple Silicon).
@@ -166,7 +282,62 @@ pub fn deinit(self: *Buffer, device: *rhi.Device) void {
         self.backend.mtl.buffer.release();
         return;
     }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        if (self.backend.webgl.shadow) |sh| {
+            if (self.backend.webgl.allocator) |a| a.free(sh);
+            self.backend.webgl.shadow = null;
+        }
+        self.mapped_region = null;
+        // Any VAO referencing this buffer must go with it: GL reuses handle
+        // numbers, so a later buffer could otherwise inherit a stale VAO.
+        device.backend.webgl.vao_cache.invalidate(self.cookie);
+        rhi.webgl.gl_delete_buffer(self.backend.webgl.buffer);
+        self.backend.webgl.buffer = .none;
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        if (self.backend.wgpu.shadow) |sh| {
+            if (self.backend.wgpu.allocator) |a| a.free(sh);
+            self.backend.wgpu.shadow = null;
+        }
+        self.mapped_region = null;
+        rhi.webgpu.wgpu_release(self.backend.wgpu.buffer);
+        self.backend.wgpu.buffer = .none;
+        return;
+    }
     unreachable;
+}
+
+/// Push a WebGPU buffer's wasm-memory shadow to the GPU and retire it.
+///
+/// Called automatically the first time the buffer is bound or copied from. Once
+/// flushed, `mapped_region` is `null`: WebGPU has no persistent host mapping, so
+/// a write after this point would land in memory the GPU never reads. Leaving
+/// the field non-null would make that failure silent. Per-frame updates should
+/// go through a fresh write path rather than reusing `mapped_region`.
+///
+/// A no-op on every other backend, where `mapped_region` really is device memory.
+pub fn flush(self: *Buffer, device: *rhi.Device) void {
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        const shadow = self.backend.wgpu.shadow orelse return;
+        rhi.webgpu.wgpu_queue_write_buffer(
+            device.backend.wgpu.queue,
+            self.backend.wgpu.buffer,
+            0,
+            shadow.ptr,
+            @intCast(shadow.len),
+        );
+        if (self.backend.wgpu.allocator) |a| a.free(shadow);
+        self.backend.wgpu.shadow = null;
+        self.mapped_region = null;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        const shadow = self.backend.webgl.shadow orelse return;
+        rhi.webgl.gl_buffer_sub_data(self.backend.webgl.buffer, 0, shadow.ptr, @intCast(shadow.len));
+        if (self.backend.webgl.allocator) |a| a.free(shadow);
+        self.backend.webgl.shadow = null;
+        self.mapped_region = null;
+    }
 }
 
 //pub fn init(renderer: *rhi.Renderer, device: *rhi.Device, options: struct {

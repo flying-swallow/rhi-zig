@@ -15,8 +15,20 @@ struct PushConsts {
     float aspect;
     float y_sign; // +1 for Metal (NDC Y up), -1 for Vulkan (NDC Y down)
 };
+
+// WebGPU has no push constants, and slangc emits `[[vk::push_constant]]` as a
+// WGSL `var<uniform>` with no `@group`/`@binding` attribute, which the browser
+// rejects outright. Declaring the same block as an explicitly bound
+// ConstantBuffer produces valid `@group(0) @binding(0) var<uniform>`; the
+// WebGPU backend binds a uniform buffer there and `Cmd.set_push_constants`
+// writes it. Selected by `-DRHI_WGSL=1` from examples/build.zig.
+#ifdef RHI_WGSL
+[[vk::binding(0, 0)]]
+ConstantBuffer<PushConsts> pc;
+#else
 [[vk::push_constant]]
 PushConsts pc;
+#endif
 
 float4x4 rotateY(float a) {
     float c = cos(a);

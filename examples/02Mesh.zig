@@ -4,9 +4,12 @@
 const std = @import("std");
 const rhi = @import("rhi");
 const builtin = @import("builtin");
-const sdl_app = @import("./sdl_app.zig");
+// `pub` so `web_root.zig` can reach the harness without importing
+// platform.zig itself — a file may belong to only one module.
+pub const platform = @import("./platform.zig");
 
 const is_apple = builtin.os.tag == .macos or builtin.os.tag == .ios;
+const is_web = builtin.cpu.arch.isWasm();
 
 const vs_path = if (is_apple) "example_assets/02_mesh.vert.metal" else "example_assets/02_mesh.vert.spv";
 const fs_path = if (is_apple) "example_assets/02_mesh.frag.metal" else "example_assets/02_mesh.frag.spv";
@@ -26,7 +29,7 @@ const SwapchainRef = rhi.gpu_ref.GPURef(rhi.Swapchain, .heap);
 const Deferral = rhi.timline_deferral.TimelineDeferral(&.{*SwapchainRef});
 
 pub const Context = struct {
-    window: *sdl_app.sdl.SDL_Window = undefined,
+    window: *platform.Window = undefined,
     swapchain: *SwapchainRef = undefined,
     device: rhi.Device = undefined,
     timekeeper: rhi.TimeKeeper = undefined,
@@ -62,7 +65,7 @@ pub const cube_mesh = [_]f32{
     0.5,  0.5,  0.5, // V7
 };
 
-fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.sdl.SDL_AppResult {
+fn iterate_handler(app_context: *platform.AppContext(Context)) anyerror!platform.AppResult {
     var cntx = &app_context.inner;
     while (cntx.timekeeper.consume()) {}
 
@@ -74,7 +77,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     {
         var w: c_int = 0;
         var h: c_int = 0;
-        const have_size = sdl_app.sdl.SDL_GetWindowSize(cntx.window, &w, &h);
+        const have_size = platform.window_size_in_pixels(cntx.window, &w, &h);
         const presentable = have_size and w > 0 and h > 0;
         if (presentable and (cntx.force_rebuild or
             cntx.swapchain.inner.width != @as(u16, @intCast(w)) or
@@ -117,7 +120,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     switch (try cntx.swapchain.inner.acquire_next_image(&cntx.device, &swapchain_index)) {
         .out_of_date => {
             cntx.force_rebuild = true;
-            return sdl_app.sdl.SDL_APP_CONTINUE;
+            return .cont;
         },
         else => {},
     }
@@ -167,7 +170,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     cmd.bind_index_buffer(&cntx.device,&cntx.cube_index_buffer, .uint16);
 
     const pc: PushConsts = .{
-        .time = @as(f32, @floatFromInt(sdl_app.sdl.SDL_GetTicks())) / 1000.0,
+        .time = @as(f32, @floatFromInt(platform.ticks_ms())) / 1000.0,
         .aspect = @as(f32, @floatFromInt(w)) / @as(f32, @floatFromInt(h)),
         .y_sign = if (is_apple) 1.0 else -1.0,
     };
@@ -193,43 +196,32 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     // Close this frame's usage batch at the timeline value the submit signalled.
     try cntx.deferral.seal(cntx.timeline.pending());
 
-    cntx.timekeeper.produce(sdl_app.sdl.SDL_GetPerformanceCounter());
-    return sdl_app.sdl.SDL_APP_CONTINUE;
+    cntx.timekeeper.produce(platform.perf_counter());
+    return .cont;
 }
 
-fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror!sdl_app.sdl.SDL_AppResult {
-    _ = argv;
-    if (sdl_app.sdl.SDL_SetAppMetadata("02-Mesh", "0.0.0", "mesh") == false) {
-        return error.SetAppMetadataFailed;
-    }
-    if (sdl_app.sdl.SDL_Init(sdl_app.sdl.SDL_INIT_VIDEO) == false) {
-        return error.SDLInitFailed;
-    }
-
-    const window = sdl_app.sdl.SDL_CreateWindow("02-mesh", 640, 480, sdl_app.sdl.SDL_WINDOW_RESIZABLE);
-    if (window == null) return error.CreateWindowFailed;
-    errdefer sdl_app.sdl.SDL_DestroyWindow(window);
-
-    const window_handle = try sdl_app.sdl_window_handle_to_rhi_window_handle(window.?);
+fn app_init(app_context: *platform.AppContext(Context), window: *platform.Window) !platform.AppResult {
     var cntx: *Context = &app_context.inner;
 
-    try rhi.Renderer.init(app_context.gpa, if (is_apple)
-        .{ .mtl = .{} }
-    else
-        .{ .vk = .{ .app_name = "GraphicsKernel", .enable_validation_layer = true } });
+    const window_handle = try platform.window_handle(window);
+    try platform.init_renderer(app_context.gpa);
     var adapters = try rhi.PhysicalAdapter.enumerate_adapters(app_context.gpa);
     defer adapters.deinit(app_context.gpa);
 
     const selected_adapter_index = rhi.PhysicalAdapter.default_select_adapter(adapters.items[0..]);
     cntx.device = try rhi.Device.init(app_context.gpa, &adapters.items[selected_adapter_index]);
+
+    var init_w: c_int = 0;
+    var init_h: c_int = 0;
+    _ = platform.window_size_in_pixels(window, &init_w, &init_h);
     const swapchain = try rhi.Swapchain.init(app_context.gpa, &cntx.device, .{
-        .width = 640,
-        .height = 480,
+        .width = if (init_w > 0) @intCast(init_w) else 640,
+        .height = if (init_h > 0) @intCast(init_h) else 480,
         .queue = &cntx.device.graphics_queue,
         .source = .{ .window_handle = window_handle },
     });
     cntx.swapchain = try SwapchainRef.create(app_context.gpa, &cntx.device, swapchain);
-    cntx.timekeeper = .{ .tocks_per_s = sdl_app.sdl.SDL_GetPerformanceFrequency() };
+    cntx.timekeeper = .{ .tocks_per_s = platform.perf_frequency() };
     cntx.graphics_cmd_ring = try CmdRingBuffer.init(&cntx.device,&cntx.device.graphics_queue);
     cntx.timeline = try rhi.Timeline.init(&cntx.device);
     cntx.deferral = Deferral.init(app_context.gpa);
@@ -258,21 +250,34 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
         @memcpy(cntx.cube_vertex_buffer.mapped_region.?[0..vertex_bytes.len], vertex_bytes);
     }
 
-    const vs = std.Io.Dir.cwd().readFileAllocOptions(app_context.io, vs_path, app_context.gpa, .unlimited, .@"4", null) catch |err| {
-        std.log.err("Failed to open vertex shader '{s}': {}", .{ vs_path, err });
-        return err;
+    // Freestanding wasm has no filesystem, so the web build embeds its shaders
+    // at build time. Both languages are embedded because the backend is picked
+    // in the browser: WGSL for WebGPU, GLSL ES 3.00 for the WebGL2 fallback.
+    // (`shader_*` names are anonymous module imports; see examples/build.zig.)
+    cntx.shader = blk: {
+        if (comptime is_web) {
+            const vs: []const u8 = if (rhi.renderer.instance.backend == .webgl) @embedFile("shader_vs_glsl") else @embedFile("shader_vs");
+            const fs: []const u8 = if (rhi.renderer.instance.backend == .webgl) @embedFile("shader_fs_glsl") else @embedFile("shader_fs");
+            break :blk try rhi.Shader.init_graphics_shader(&cntx.device, .{
+                .vertex_stage = .{ .data = vs, .entry_point = "vertexMain" },
+                .fragment_stage = .{ .data = fs, .entry_point = "fragmentMain" },
+            });
+        }
+        const vs = std.Io.Dir.cwd().readFileAllocOptions(app_context.io, vs_path, app_context.gpa, .unlimited, .@"4", null) catch |err| {
+            std.log.err("Failed to open vertex shader '{s}': {}", .{ vs_path, err });
+            return err;
+        };
+        defer app_context.gpa.free(vs);
+        const fs = std.Io.Dir.cwd().readFileAllocOptions(app_context.io, fs_path, app_context.gpa, .unlimited, .@"4", null) catch |err| {
+            std.log.err("Failed to open fragment shader '{s}': {}", .{ fs_path, err });
+            return err;
+        };
+        defer app_context.gpa.free(fs);
+        break :blk try rhi.Shader.init_graphics_shader(&cntx.device, .{
+            .vertex_stage = .{ .data = vs, .entry_point = "vertexMain" },
+            .fragment_stage = .{ .data = fs, .entry_point = "fragmentMain" },
+        });
     };
-    defer app_context.gpa.free(vs);
-    const fs = std.Io.Dir.cwd().readFileAllocOptions(app_context.io, fs_path, app_context.gpa, .unlimited, .@"4", null) catch |err| {
-        std.log.err("Failed to open fragment shader '{s}': {}", .{ fs_path, err });
-        return err;
-    };
-    defer app_context.gpa.free(fs);
-
-    cntx.shader = try rhi.Shader.init_graphics_shader(&cntx.device, .{
-        .vertex_stage = .{ .data = vs, .entry_point = "vertexMain" },
-        .fragment_stage = .{ .data = fs, .entry_point = "fragmentMain" },
-    });
     cntx.pipeline = try rhi.Pipeline.init_graphics(&cntx.device, .{
         .shader = &cntx.shader,
         .swapchain = &cntx.swapchain.inner,
@@ -294,11 +299,11 @@ fn app_init(app_context: *sdl_app.AppContext(Context), argv: [][*:0]u8) anyerror
         .aspect = .depth,
     });
 
-    cntx.window = window.?;
-    return sdl_app.sdl.SDL_APP_CONTINUE;
+    cntx.window = window;
+    return .cont;
 }
 
-fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_AppResult) void {
+fn app_quit(app_context: *platform.AppContext(Context), result: platform.AppResult) void {
     var cntx: *Context = &app_context.inner;
     cntx.device.graphics_queue.wait_queue_idle(&cntx.device) catch |err| {
         std.log.err("Failed to wait graphics queue idle: {}", .{err});
@@ -321,25 +326,42 @@ fn app_quit(app_context: *sdl_app.AppContext(Context), result: sdl_app.sdl.SDL_A
     cntx.device.deinit();
     rhi.Renderer.deinit();
 
-    std.debug.print("App quit called with result: {any}\n", .{result});
+    // std.log rather than std.debug.print: the latter goes through
+    // `std.Options.debug_io`, which does not exist on freestanding wasm.
+    std.log.info("App quit called with result: {t}", .{result});
 }
 
-fn app_event(app_context: *sdl_app.AppContext(Context), event: *sdl_app.sdl.SDL_Event) anyerror!sdl_app.sdl.SDL_AppResult {
+fn app_event(app_context: *platform.AppContext(Context), event: *platform.Event) !platform.AppResult {
     _ = app_context;
-    switch (event.type) {
-        sdl_app.sdl.SDL_EVENT_QUIT => {
-            return sdl_app.sdl.SDL_APP_SUCCESS;
-        },
-        else => {},
-    }
-    return sdl_app.sdl.SDL_APP_CONTINUE;
+    _ = event;
+    // The desktop harness handles SDL_EVENT_QUIT itself; the web dispatches no
+    // events at all (the page's lifetime is the app's).
+    return .cont;
 }
 
-pub fn main(init: std.process.Init) !void {
-    _ = sdl_app.SdlApplicaton(Context, .{
-        .iterate_handler = iterate_handler,
-        .app_init = app_init,
-        .app_event = app_event,
-        .app_quit = app_quit,
-    }).exec(init);
+pub const App = platform.Application(Context, .{
+    .title = "02-mesh",
+    .iterate_handler = iterate_handler,
+    .app_init = app_init,
+    .app_event = app_event,
+    .app_quit = app_quit,
+});
+
+// Emits `rhi_web_init` / `rhi_web_frame` / `rhi_web_deinit` for the JS glue to
+// call. An empty namespace off the web.
+comptime {
+    _ = App.web_exports;
 }
+
+/// The browser owns the frame loop on the web: the glue instantiates the module
+/// and drives the exports above, so `main` never runs there. It is still
+/// declared because `std.start` inspects `root.main` regardless of `-fno-entry`
+/// — but its parameter type is `void` on the web, because naming
+/// `std.process.Init` there drags in `std.Io.Threaded` and, through it, posix.
+pub fn main(init: if (is_web) void else std.process.Init) !void {
+    if (comptime is_web) return;
+    _ = App.exec(init);
+}
+
+/// `std.log` has nowhere to go on freestanding wasm without this.
+pub const std_options: std.Options = .{ .logFn = platform.logFn };

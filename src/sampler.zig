@@ -22,6 +22,12 @@ backend: union(rhi.Backend) {
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
     mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    // Samplers are outside the WebGPU backend's scope (examples 00-02 use none);
+    // `init` reports `error.UnsupportedBackend` rather than returning a stub.
+    wgpu: if (rhi.platform_has_api(.wgpu)) void else void,
+    // WebGL2 has no separate sampler object in the form the RHI models; filter
+    // state lives on the texture. Out of scope, like the WebGPU arm.
+    webgl: if (rhi.platform_has_api(.webgl)) void else void,
 },
 
 /// Build a sampler descriptor referencing this sampler (cookie derived from the
@@ -92,12 +98,16 @@ pub fn init(device: *rhi.Device, desc: struct {
 pub fn deinit(self: *Sampler, device: *rhi.Device) void {
     switch (self.backend) {
         .vk => |vk| {
-            if (vk.sampler != .null_handle) {
-                var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
-                dkb.destroySampler(device.backend.vk.device, vk.sampler, null);
+            if (comptime rhi.platform_has_api(.vk)) {
+                if (vk.sampler != .null_handle) {
+                    var dkb: *rhi.vulkan.vk.DeviceWrapper = &device.backend.vk.dkb;
+                    dkb.destroySampler(device.backend.vk.device, vk.sampler, null);
+                }
             }
         },
         .dx12 => {},
         .mtl => {},
+        .wgpu => {},
+        .webgl => {},
     }
 }

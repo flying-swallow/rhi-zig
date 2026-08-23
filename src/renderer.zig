@@ -24,7 +24,16 @@ backend: union(rhi.Backend) {
         ikb: rhi.vulkan.vk.InstanceWrapper,
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
-    mtl: if (rhi.platform_has_api(.mtl)) void else void 
+    mtl: if (rhi.platform_has_api(.mtl)) void else void,
+    // The adapter and device are requested by the JS glue before the wasm
+    // module is instantiated, so there is no instance-level object to hold:
+    // `navigator.gpu` is reached directly from the glue.
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+        adapter: rhi.webgpu.Handle = .none,
+    } else void,
+    // WebGL2 has no instance object: the canvas context is created by the glue
+    // before instantiation, alongside the WebGPU probe.
+    webgl: if (rhi.platform_has_api(.webgl)) struct {} else void,
 },
 
 pub fn apiString() []const u8 {
@@ -32,6 +41,8 @@ pub fn apiString() []const u8 {
         .vk => "Vulkan",
         .dx12 => "DirectX 12",
         .mtl => "Metal",
+        .wgpu => "WebGPU",
+        .webgl => "WebGL2",
     };
 }
 
@@ -44,6 +55,12 @@ pub fn target_api() rhi.Backend {
     }
     if (instance.backend == .mtl and comptime rhi.platform_has_api(.mtl)) {
         return .mtl;
+    }
+    if (instance.backend == .wgpu and comptime rhi.platform_has_api(.wgpu)) {
+        return .wgpu;
+    }
+    if (instance.backend == .webgl and comptime rhi.platform_has_api(.webgl)) {
+        return .webgl;
     }
     unreachable;
 }
@@ -62,6 +79,10 @@ pub fn deinit() void {
         },
         .dx12 => {},
         .mtl => {},
+        .wgpu => |w| {
+            if (comptime rhi.platform_has_api(.wgpu)) rhi.webgpu.wgpu_release(w.adapter);
+        },
+        .webgl => {},
     }
 }
 
@@ -69,6 +90,8 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
     vk: struct { app_name: [*:0]const u8, enable_validation_layer: bool },
     dx12: struct {},
     mtl: struct {},
+    wgpu: struct {},
+    webgl: struct {},
 }) !void {
     switch (impl) {
         .vk => |opt| {
@@ -223,6 +246,28 @@ pub fn init(alloc: std.mem.Allocator, impl: union(rhi.Backend) {
                 return;
             }
             return error.MetalNotSupported;
+        },
+        .wgpu => {
+            if (comptime rhi.platform_has_api(.wgpu)) {
+                // The glue requested the adapter before instantiating this
+                // module; a null handle means `navigator.gpu` was unavailable
+                // or `requestAdapter` was rejected.
+                const adapter = rhi.webgpu.wgpu_adapter_get();
+                if (adapter.isNone()) return error.WebGPUAdapterUnavailable;
+                Renderer.instance = Renderer{ .backend = .{ .wgpu = .{ .adapter = adapter } } };
+                return;
+            }
+            return error.WebGPUNotSupported;
+        },
+        .webgl => {
+            if (comptime rhi.platform_has_api(.webgl)) {
+                // The glue created the canvas context before instantiating this
+                // module; a zero here means `getContext("webgl2")` failed.
+                if (rhi.webgl.gl_available() == 0) return error.WebGL2Unavailable;
+                Renderer.instance = Renderer{ .backend = .{ .webgl = .{} } };
+                return;
+            }
+            return error.WebGL2NotSupported;
         },
     }
 }

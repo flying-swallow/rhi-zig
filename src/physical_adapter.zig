@@ -44,6 +44,13 @@ backend: union {
     mtl: if (rhi.platform_has_api(.mtl)) struct {
         device: rhi.metal.mtl.Device,
     } else void,
+    // A page gets exactly one `GPUAdapter`, requested by the glue before the
+    // wasm module was instantiated. There is nothing to enumerate.
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+        adapter: rhi.webgpu.Handle = .none,
+    } else void,
+    // WebGL2 exposes no adapter object at all — the context is the device.
+    webgl: if (rhi.platform_has_api(.webgl)) struct {} else void,
 },
 name: [256]u8 = std.mem.zeroes([256]u8),
 luid: u64 = 0,
@@ -527,6 +534,79 @@ pub fn enumerate_adapters(allocator: std.mem.Allocator) !std.ArrayList(PhysicalA
         const name = device.name().utf8();
         const n = @min(name.len, physical_adapter.name.len - 1);
         std.mem.copyForwards(u8, physical_adapter.name[0..n], name[0..n]);
+        try result.append(allocator, physical_adapter);
+    }
+    if (rhi.is_target_selected(.wgpu)) {
+        const wgpu = rhi.webgpu;
+        const adapter = rhi.renderer.instance.backend.wgpu.adapter;
+        var physical_adapter: PhysicalAdapter = .{ .backend = .{ .wgpu = .{ .adapter = adapter } } };
+
+        physical_adapter.device_id = wgpu.wgpu_adapter_device_id(adapter);
+        physical_adapter.vendor = switch (wgpu.wgpu_adapter_vendor_id(adapter)) {
+            0x10DE => .nvidia,
+            0x1002, 0x1022 => .amd,
+            0x8086 => .intel,
+            else => .unknown,
+        };
+        // The browser deliberately reports only a coarse hint here (and often
+        // nothing at all), so this is best-effort rather than a real probe.
+        physical_adapter.adapter_type = switch (wgpu.wgpu_adapter_type(adapter)) {
+            0 => .discrete,
+            1 => .integrated,
+            2 => .cpu,
+            else => .other,
+        };
+        physical_adapter.preset_level = .high;
+
+        // WebGPU exposes no memory heap sizes at all — there is no equivalent of
+        // VkPhysicalDeviceMemoryProperties — so the memory fields stay zero
+        // rather than carrying a fabricated number. `default_select_adapter`
+        // only compares them between adapters, and there is only ever one.
+
+        // Limits the RHI surfaces. Everything else stays at its default; the
+        // browser enforces its own limits and rejects violations at validation.
+        physical_adapter.viewport_max_num = 1;
+        // These RHI fields are u16 while WebGPU reports u32, so saturate rather
+        // than wrap: a limit larger than the field can hold is still "at least
+        // as permissive as anything we can ask for".
+        const limit = struct {
+            fn get(a: rhi.webgpu.Handle, comptime name: []const u8) u16 {
+                const v = wgpu.wgpu_adapter_limit(a, name.ptr, name.len);
+                return if (v > std.math.maxInt(u16)) std.math.maxInt(u16) else @intCast(v);
+            }
+        }.get;
+        physical_adapter.texture_1d_max_dim = limit(adapter, "maxTextureDimension1D");
+        physical_adapter.texture_2d_max_dim = limit(adapter, "maxTextureDimension2D");
+        physical_adapter.texture_3d_max_dim = limit(adapter, "maxTextureDimension3D");
+        physical_adapter.texture_array_layer_max_num = limit(adapter, "maxTextureArrayLayers");
+
+        _ = wgpu.wgpu_adapter_name(adapter, &physical_adapter.name, physical_adapter.name.len - 1);
+        try result.append(allocator, physical_adapter);
+    }
+    if (rhi.is_target_selected(.webgl)) {
+        const webgl = rhi.webgl;
+        var physical_adapter: PhysicalAdapter = .{ .backend = .{ .webgl = .{} } };
+        // WebGL2 reports no vendor/device id and no memory sizes; those stay at
+        // their defaults rather than carrying a fabricated number. There is
+        // only ever one adapter, and `default_select_adapter` only compares
+        // between adapters.
+        physical_adapter.adapter_type = .other;
+        physical_adapter.preset_level = .medium;
+        physical_adapter.viewport_max_num = 1;
+
+        const clamp = struct {
+            fn to_u16(v: i32) u16 {
+                if (v <= 0) return 0;
+                return if (v > std.math.maxInt(u16)) std.math.maxInt(u16) else @intCast(v);
+            }
+        }.to_u16;
+        const max_2d = clamp(webgl.gl_get_parameter_int(webgl.gl.MAX_TEXTURE_SIZE));
+        physical_adapter.texture_1d_max_dim = max_2d;
+        physical_adapter.texture_2d_max_dim = max_2d;
+        physical_adapter.texture_3d_max_dim = clamp(webgl.gl_get_parameter_int(webgl.gl.MAX_3D_TEXTURE_SIZE));
+        physical_adapter.texture_array_layer_max_num = clamp(webgl.gl_get_parameter_int(webgl.gl.MAX_ARRAY_TEXTURE_LAYERS));
+
+        _ = webgl.gl_renderer_name(&physical_adapter.name, physical_adapter.name.len - 1);
         try result.append(allocator, physical_adapter);
     }
     return result;

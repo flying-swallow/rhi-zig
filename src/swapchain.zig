@@ -8,16 +8,27 @@ const zwindows = if (builtin.os.tag == .windows) @import("zwindows") else void;
 
 pub const SwapchainFormat = enum { bt709_g10_16bit, bt709_g22_8bit, bt709_g22_10bit, bt2020_g2084_10bit };
 
-pub const WindowType = if (builtin.os.tag == .windows) enum {
+pub const WindowType = if (rhi.is_web) enum {
+    canvas,
+} else if (builtin.os.tag == .windows) enum {
     windows,
 } else if (builtin.os.tag == .linux) enum {
     x11,
     wayland,
-} else if (builtin.os.tag == .macos or .ios) enum { metal } else {
+} else if (builtin.os.tag == .macos or builtin.os.tag == .ios) enum {
+    metal,
+} else {
     @compileError("Unsupported platform for WindowType");
 };
 
-pub const WindowHandle = if (builtin.os.tag == .windows) union(WindowType) {
+pub const WindowHandle = if (rhi.is_web) union(WindowType) {
+    /// A CSS selector naming the `<canvas>` to render into, e.g. `"#canvas"`.
+    /// The glue resolves it with `document.querySelector` and takes a WebGPU
+    /// context from it; the slice must outlive the swapchain's `init` call.
+    canvas: struct {
+        selector: []const u8 = "#canvas",
+    },
+} else if (builtin.os.tag == .windows) union(WindowType) {
     windows: struct {
         hwnd: ?*anyopaque = null,
         hinstance: ?*anyopaque = null,
@@ -32,7 +43,7 @@ pub const WindowHandle = if (builtin.os.tag == .windows) union(WindowType) {
         surface: ?*anyopaque = null,
         shell_surface: ?*anyopaque = null,
     },
-} else if (builtin.os.tag == .macos or .ios) union(WindowType) {
+} else if (builtin.os.tag == .macos or builtin.os.tag == .ios) union(WindowType) {
     metal: struct {
         layer: ?*anyopaque = null,
     },
@@ -105,6 +116,28 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 layer: rhi.metal.ca.MetalLayer,
                 pixel_format: rhi.metal.types.PixelFormat,
                 current_drawable: ?rhi.metal.ca.MetalDrawable = null,
+            } else void,
+            // WebGPU has no swapchain object: a configured canvas context hands
+            // out one texture per frame. There is no image ring to index, no
+            // acquire semaphore, and no explicit present — the browser composites
+            // whatever was submitted when the frame callback returns.
+            wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+                surface: rhi.webgpu.Handle = .none,
+                format: rhi.webgpu.TextureFormat = .bgra8unorm,
+                /// This frame's canvas texture and its view. Both are refreshed
+                /// by `acquire_next_image` and released after submit, because a
+                /// canvas texture is only valid for the frame that acquired it.
+                current_texture: rhi.webgpu.Handle = .none,
+                current_view: rhi.webgpu.Handle = .none,
+            } else void,
+            // WebGL2 cannot attach the canvas's colour buffer to a custom FBO,
+            // and 02_mesh pairs the swapchain image with its own depth view in
+            // one pass. So rendering always targets an offscreen colour texture
+            // which `frame_submit` blits onto the canvas.
+            webgl: if (rhi.platform_has_api(.webgl)) struct {
+                color: rhi.webgl.Handle = .none,
+                fbo: rhi.webgl.Handle = .none,
+                format: rhi.Format = .rgba8_unorm,
             } else void,
         },
 
@@ -185,6 +218,26 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
             if (rhi.is_target_selected(.mtl)) {
                 return .{ .backend = .{ .mtl = self.backend.mtl.current_drawable.?.texture() } };
             }
+            if (rhi.is_target_selected(.wgpu)) {
+                std.debug.assert(index == 0);
+                return .{ .backend = .{ .wgpu = self.backend.wgpu.current_view } };
+            }
+            if (rhi.is_target_selected(.webgl)) {
+                std.debug.assert(index == 0);
+                return .{
+                    .backend = .{ .webgl = .{
+                        .texture = self.backend.webgl.color,
+                        .format = self.backend.webgl.format,
+                        .width = self.width,
+                        .height = self.height,
+                    } },
+                    // Stable across frames, unlike the WebGPU arm's per-frame
+                    // canvas texture, so the FBO cache keyed on it stays warm.
+                    // Offset into the high half so it cannot collide with a
+                    // cookie handed out by `rhi.next_cookie`.
+                    .cookie = @as(u64, @intFromEnum(self.backend.webgl.color)) | (1 << 32),
+                };
+            }
             unreachable;
         }
 
@@ -194,6 +247,28 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
             }
             if (rhi.is_target_selected(.mtl)) {
                 return .{ .backend = .{ .mtl = .{ .texture = self.backend.mtl.current_drawable.?.texture() } } };
+            }
+            if (rhi.is_target_selected(.wgpu)) {
+                std.debug.assert(index == 0);
+                // `owned = false`: the canvas texture belongs to the browser and
+                // is invalidated when the frame ends, so a `deinit` on this copy
+                // must not release it.
+                return .{ .backend = .{ .wgpu = .{
+                    .texture = self.backend.wgpu.current_texture,
+                    .owned = false,
+                } } };
+            }
+            if (rhi.is_target_selected(.webgl)) {
+                std.debug.assert(index == 0);
+                // `owned = false`: the swapchain owns this texture, so a
+                // `deinit` on the by-value copy must not delete it.
+                return .{ .backend = .{ .webgl = .{
+                    .texture = self.backend.webgl.color,
+                    .format = self.backend.webgl.format,
+                    .width = self.width,
+                    .height = self.height,
+                    .owned = false,
+                } } };
             }
             unreachable;
         }
@@ -216,6 +291,24 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 return;
             }
             if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
+                return;
+            }
+            if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                rhi.webgl.gl_delete_framebuffer(self.backend.webgl.fbo);
+                rhi.webgl.gl_delete_texture(self.backend.webgl.color);
+                self.backend.webgl.fbo = .none;
+                self.backend.webgl.color = .none;
+                return;
+            }
+            if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+                rhi.webgpu.wgpu_release(self.backend.wgpu.current_view);
+                rhi.webgpu.wgpu_release(self.backend.wgpu.current_texture);
+                // A swapchain that handed its surface to a successor (init's
+                // old_swapchain arm) has `.none` here — only the last owner drops it.
+                rhi.webgpu.wgpu_release(self.backend.wgpu.surface);
+                self.backend.wgpu.current_view = .none;
+                self.backend.wgpu.current_texture = .none;
+                self.backend.wgpu.surface = .none;
                 return;
             }
             unreachable;
@@ -250,6 +343,42 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 out_index.* = 0;
                 return .ok;
             }
+            if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                // The offscreen target persists across frames, so there is
+                // nothing to acquire and no way for this to be out of date.
+                out_index.* = 0;
+                return .ok;
+            }
+            if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+                const wgpu = rhi.webgpu;
+                // Last frame's texture and view are invalid now; drop them before
+                // taking this frame's.
+                wgpu.wgpu_release(self.backend.wgpu.current_view);
+                wgpu.wgpu_release(self.backend.wgpu.current_texture);
+
+                const texture = wgpu.wgpu_surface_get_current_texture(self.backend.wgpu.surface);
+                if (texture.isNone()) {
+                    self.backend.wgpu.current_texture = .none;
+                    self.backend.wgpu.current_view = .none;
+                    // The canvas was resized out from under the configuration, or
+                    // the context was lost; either way the caller must reconfigure.
+                    return .out_of_date;
+                }
+                const view = wgpu.wgpu_texture_create_view(
+                    texture,
+                    self.backend.wgpu.format,
+                    .@"2d",
+                    .all,
+                    0,
+                    1,
+                    0,
+                    1,
+                );
+                self.backend.wgpu.current_texture = texture;
+                self.backend.wgpu.current_view = view;
+                out_index.* = 0;
+                return .ok;
+            }
             unreachable;
         }
 
@@ -270,6 +399,15 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                     else => return err,
                 };
                 return if (res == .suboptimal_khr) .suboptimal else .ok;
+            }
+            if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                return error.UnsupportedBackend;
+            }
+            if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+                // vk-named and vk-typed. The web has no explicit present at all:
+                // the browser composites the canvas once the frame callback
+                // returns. Use `frame_submit`.
+                return error.UnsupportedBackend;
             }
             unreachable;
         }
@@ -336,10 +474,104 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 self.backend.mtl.current_drawable = null;
                 return .ok;
             }
+            if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                const timeline_value = options.timeline.next();
+                var cmds = [_]*rhi.Cmd{options.cmd};
+                try queue.submit(device, .{ .webgl = .{ .cmds = &cmds } });
+
+                // Resolve the offscreen target onto the canvas. The browser
+                // composites whatever framebuffer 0 holds when the frame
+                // callback returns; there is no present call.
+                rhi.webgl.gl_blit_to_canvas(self.backend.webgl.fbo, self.width, self.height);
+                options.timeline.signal_webgl(timeline_value);
+                return .ok;
+            }
+            if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+                const timeline_value = options.timeline.next();
+                var cmds = [_]*rhi.Cmd{options.cmd};
+                try queue.submit(device, .{ .wgpu = .{ .cmds = &cmds } });
+
+                // No present call: the browser composites the configured canvas
+                // when the frame callback returns. Registering the completion
+                // callback here is what lets `Timeline.completed` advance, which
+                // deferred-release consumers drain against.
+                const split = rhi.webgpu.split_u64(timeline_value);
+                rhi.webgpu.wgpu_queue_on_submitted_work_done(
+                    queue.backend.wgpu.queue,
+                    &options.timeline.backend.wgpu.completed_value,
+                    split.lo,
+                    split.hi,
+                );
+                return .ok;
+            }
             unreachable;
         }
 
         pub fn init(allocator: std.mem.Allocator, device: *rhi.Device, desc: Desc) !Self {
+            if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                const webgl = rhi.webgl;
+                // WebGL2 cannot attach the canvas's colour buffer to a custom
+                // FBO, and a render pass with a depth attachment needs one. So
+                // the swapchain owns an offscreen colour texture, and
+                // `frame_submit` blits it onto the canvas.
+                //
+                // RGBA8 rather than the browser's preferred canvas format:
+                // WebGL2 has no renderable BGRA.
+                const format: rhi.Format = .rgba8_unorm;
+                const gl_format = try webgl.to_gl_format(format);
+                const color = webgl.gl_create_texture_2d(gl_format.internal_format, desc.width, desc.height, 1);
+                if (color.isNone()) return error.WebGL2TextureCreationFailed;
+                errdefer webgl.gl_delete_texture(color);
+
+                const fbo = webgl.gl_create_framebuffer();
+                if (fbo.isNone()) return error.WebGL2FramebufferCreationFailed;
+                errdefer webgl.gl_delete_framebuffer(fbo);
+                webgl.gl_framebuffer_texture_2d(fbo, webgl.gl.COLOR_ATTACHMENT0, color);
+                if (webgl.gl_check_framebuffer_status(fbo) != webgl.gl.FRAMEBUFFER_COMPLETE)
+                    return error.WebGL2FramebufferIncomplete;
+
+                return Self{
+                    .allocator = allocator,
+                    .present_queue = desc.queue,
+                    // One target, refreshed in place; there is no image ring.
+                    .image_count = 1,
+                    .width = desc.width,
+                    .height = desc.height,
+                    .backend = .{ .webgl = .{ .color = color, .fbo = fbo, .format = format } },
+                };
+            }
+            if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+                const wgpu = rhi.webgpu;
+                // On recreate the canvas context is the same object; only the
+                // configured size changes, so the surface handle is carried over
+                // rather than rebuilt (and the old swapchain gives up ownership).
+                const surface = switch (desc.source) {
+                    .window_handle => |handle| wgpu.wgpu_surface_create(handle.canvas.selector.ptr, @intCast(handle.canvas.selector.len)),
+                    .old_swapchain => |o| blk: {
+                        const h = o.backend.wgpu.surface;
+                        o.backend.wgpu.surface = .none;
+                        break :blk h;
+                    },
+                };
+                if (surface.isNone()) return error.WebGPUSurfaceCreationFailed;
+
+                // `desc.format` selects a colour space / bit depth the browser
+                // does not let us choose: a canvas takes the preferred format for
+                // the device, and anything else risks an unsupported combination.
+                const format = wgpu.wgpu_surface_preferred_format();
+                wgpu.wgpu_surface_configure(surface, device.backend.wgpu.device, format, desc.width, desc.height);
+
+                return Self{
+                    .allocator = allocator,
+                    .present_queue = desc.queue,
+                    // WebGPU hands out one texture per frame; there is no ring of
+                    // images for the caller to index, so the count is always 1.
+                    .image_count = 1,
+                    .width = desc.width,
+                    .height = desc.height,
+                    .backend = .{ .wgpu = .{ .surface = surface, .format = format } },
+                };
+            }
             if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
                 const layer = switch (desc.source) {
                     .window_handle => |handle| rhi.metal.ca.MetalLayer.fromId(@ptrCast(@alignCast(handle.metal.layer))) orelse return error.MetalNoLayer,
