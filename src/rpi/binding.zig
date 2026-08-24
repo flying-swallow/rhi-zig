@@ -11,7 +11,6 @@
 //! without changing `bindDescriptors` / `findReflection`.
 
 const rhi = @import("../root.zig");
-const std = @import("std");
 
 /// Descriptor categories, shared with the core pipeline-layout vocabulary.
 pub const DescriptorType = rhi.pipeline_layout.DescriptorType;
@@ -80,17 +79,10 @@ pub const ShaderStageFlags = packed struct {
     }
 };
 
-/// Stable identity for a named descriptor binding. The hash is what
-/// `bindDescriptors` looks up; the name is kept for diagnostics. Mirrors
-/// `DescriptorBindingID`.
-pub const DescriptorBindingID = struct {
-    name: []const u8,
-    hash: u64,
-
-    pub fn create(name: []const u8) DescriptorBindingID {
-        return .{ .name = name, .hash = std.hash.Wyhash.hash(0, name) };
-    }
-};
+/// Stable identity for a named descriptor binding. Lives in the core module
+/// now that `Cmd.web_bind_descriptors` speaks the same vocabulary;
+/// re-exported here so `rpi.DescriptorBindingID` keeps resolving.
+pub const DescriptorBindingID = rhi.descriptor.DescriptorBindingID;
 
 /// One resolved binding: where in (set, register) a named descriptor lands.
 /// Mirrors `RIProgram::BindingReflection`.
@@ -103,22 +95,8 @@ pub const BindingReflection = struct {
     descriptor_type: DescriptorType,
 };
 
-/// A live binding handed to `bindDescriptors`: a name handle + the descriptor to
-/// write at it, optionally offset within an array. Mirrors
-/// `RIProgram::DescriptorBinding`.
-pub const DescriptorBinding = struct {
-    handle: DescriptorBindingID,
-    register_offset: u32 = 0,
-    descriptor: rhi.Descriptor,
-
-    pub fn init(name: []const u8, descriptor: rhi.Descriptor, register_offset: u32) DescriptorBinding {
-        return .{
-            .handle = DescriptorBindingID.create(name),
-            .register_offset = register_offset,
-            .descriptor = descriptor,
-        };
-    }
-};
+/// A live binding handed to `bindDescriptors`. Core type, re-exported.
+pub const DescriptorBinding = rhi.descriptor.DescriptorBinding;
 
 // ---- Explicit layout declaration -----------------------------------------
 

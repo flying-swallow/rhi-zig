@@ -160,6 +160,39 @@ int main(int argc, char **argv)
 				rename(resources.stage_inputs);
 		}
 
+		// GLSL ES 3.00 has no separate texture and sampler objects: both a
+		// sample and a texelFetch must go through a `sampler2D`. Slang emits
+		// Vulkan-style separate `Texture2D` + `SamplerState`, so they are
+		// recombined here -- which is what `opts.vulkan_semantics = false`
+		// above is already promising.
+		//
+		// A shader that only fetches declares no `SamplerState` at all, and
+		// SPIRV-Cross will not combine an image that has no sampler id, so a
+		// dummy sampler is built first. It never reaches the output as a real
+		// binding.
+		{
+			const uint32_t dummy = compiler.build_dummy_sampler_for_combined_images();
+			if (dummy != 0)
+			{
+				compiler.set_decoration(dummy, spv::DecorationDescriptorSet, 0);
+				compiler.set_decoration(dummy, spv::DecorationBinding, 0);
+			}
+			compiler.build_combined_image_samplers();
+
+			// The default name is `SPIRV_Cross_Combined<image><sampler>`, which
+			// no caller can predict. GL links by name, so -- for the same
+			// reason as the varying rename above -- the name has to be
+			// derivable from the source: each combined uniform takes the name
+			// of the *image* it came from, which is the name the .slang file
+			// used.
+			//
+			// One image used with two different samplers would produce two
+			// combinations with the same name and fail to link. That is loud
+			// rather than silent, and no shader here does it.
+			for (auto &remap : compiler.get_combined_image_samplers())
+				compiler.set_name(remap.combined_id, compiler.get_name(remap.image_id));
+		}
+
 		source = compiler.compile();
 	}
 	catch (const std::exception &e)

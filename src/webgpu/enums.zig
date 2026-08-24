@@ -152,6 +152,59 @@ pub const VertexFormat = enum(u32) {
     float32x4,
 };
 
+/// `GPUBlendFactor`. WebGPU's names differ from `rhi.pipeline.BlendFactor`'s --
+/// it says `src` where the RHI says `src_color`, and collapses the separate
+/// colour and alpha constant factors into one `constant` -- so this is its own
+/// table with a converter, exactly like `TextureFormat`.
+pub const BlendFactor = enum(u32) {
+    zero,
+    one,
+    src,
+    one_minus_src,
+    src_alpha,
+    one_minus_src_alpha,
+    dst,
+    one_minus_dst,
+    dst_alpha,
+    one_minus_dst_alpha,
+    src_alpha_saturated,
+    constant,
+    one_minus_constant,
+};
+
+/// `GPUBlendOperation`.
+pub const BlendOperation = enum(u32) { add, subtract, reverse_subtract, min, max };
+
+pub fn to_wgpu_blend_factor(f: rhi.pipeline.BlendFactor) BlendFactor {
+    return switch (f) {
+        .zero => .zero,
+        .one => .one,
+        .src_color => .src,
+        .one_minus_src_color => .one_minus_src,
+        .src_alpha => .src_alpha,
+        .one_minus_src_alpha => .one_minus_src_alpha,
+        .dst_color => .dst,
+        .one_minus_dst_color => .one_minus_dst,
+        .dst_alpha => .dst_alpha,
+        .one_minus_dst_alpha => .one_minus_dst_alpha,
+        .src_alpha_saturate => .src_alpha_saturated,
+        // WebGPU has a single blend constant rather than separate colour and
+        // alpha ones; both map onto it.
+        .constant_color, .constant_alpha => .constant,
+        .one_minus_constant_color, .one_minus_constant_alpha => .one_minus_constant,
+    };
+}
+
+pub fn to_wgpu_blend_op(op: rhi.pipeline.BlendOp) BlendOperation {
+    return switch (op) {
+        .add => .add,
+        .subtract => .subtract,
+        .reverse_subtract => .reverse_subtract,
+        .min => .min,
+        .max => .max,
+    };
+}
+
 pub const FilterMode = enum(u32) { nearest, linear };
 pub const AddressMode = enum(u32) { clamp_to_edge, repeat, mirror_repeat };
 
@@ -437,6 +490,10 @@ test "webgpu: glue.js enum tables match the Zig enums" {
     try expectTableMatches(CullMode, "CULL_MODE", js);
     try expectTableMatches(FrontFace, "FRONT_FACE", js);
     try expectTableMatches(CompareFunction, "COMPARE", js);
+    try expectTableMatches(BlendFactor, "BLEND_FACTOR", js);
+    try expectTableMatches(BlendOperation, "BLEND_OP", js);
+    try expectTableMatches(FilterMode, "FILTER_MODE", js);
+    try expectTableMatches(AddressMode, "ADDRESS_MODE", js);
     try expectTableMatches(IndexFormat, "INDEX_FORMAT", js);
     try expectTableMatches(VertexFormat, "VERTEX_FORMAT", js);
 }

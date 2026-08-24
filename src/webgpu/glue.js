@@ -22,7 +22,7 @@
 // file and the .wasm independently, so a stale glue can be paired with a fresh
 // module; JS would then silently shift every import argument rather than fail.
 // `zig build test` checks the two constants agree.
-const GLUE_ABI_VERSION = 1;
+const GLUE_ABI_VERSION = 2;
 
 const TEXTURE_FORMAT = [
   "r8unorm", "r8snorm", "r8uint", "r8sint",
@@ -61,6 +61,15 @@ const FRONT_FACE = ["ccw", "cw"];
 const COMPARE = ["never", "less", "equal", "less-equal", "greater", "not-equal", "greater-equal", "always"];
 const INDEX_FORMAT = ["uint16", "uint32"];
 const VERTEX_FORMAT = ["float32", "float32x2", "float32x3", "float32x4"];
+const BLEND_FACTOR = [
+  "zero", "one",
+  "src", "one-minus-src", "src-alpha", "one-minus-src-alpha",
+  "dst", "one-minus-dst", "dst-alpha", "one-minus-dst-alpha",
+  "src-alpha-saturated", "constant", "one-minus-constant",
+];
+const BLEND_OP = ["add", "subtract", "reverse-subtract", "min", "max"];
+const FILTER_MODE = ["nearest", "linear"];
+const ADDRESS_MODE = ["clamp-to-edge", "repeat", "mirror-repeat"];
 
 // --- Handle table ----------------------------------------------------------
 
@@ -220,6 +229,37 @@ export async function boot(wasmUrl, options = {}) {
 
   const initRc = instance.exports.rhi_web_init(selectorPtr, selectorBytes.length);
   if (initRc !== 0) throw new Error(`rhi_web_init failed with ${initRc}`);
+
+  // Pointer input. Three deliberate choices:
+  //   * `pointer*` events rather than `mouse*`, so a touch drag works with no
+  //     second code path.
+  //   * `setPointerCapture`, so a drag that leaves the canvas still delivers
+  //     its `up` -- otherwise a drag can be stranded.
+  //   * coordinates multiplied by devicePixelRatio, because the frame loop
+  //     below sizes the backing store as `clientWidth * dpr`; that is the only
+  //     multiplier putting the cursor in the space the app renders in. DOM Y is
+  //     top-down, matching the RHI's top-left-origin rects, so no flip.
+  //
+  // Guarded because an example that never references the export does not emit
+  // it, and instantiation must not depend on input.
+  const onPointer = instance.exports.rhi_web_pointer_event;
+  if (onPointer) {
+    const post = (kind, e) => {
+      const r = canvas.getBoundingClientRect();
+      const s = window.devicePixelRatio || 1;
+      onPointer(kind, (e.clientX - r.left) * s, (e.clientY - r.top) * s, e.button ?? 0);
+    };
+    canvas.addEventListener("pointermove", (e) => post(0, e));
+    canvas.addEventListener("pointerdown", (e) => {
+      canvas.setPointerCapture(e.pointerId);
+      post(1, e);
+    });
+    canvas.addEventListener("pointerup", (e) => {
+      canvas.releasePointerCapture(e.pointerId);
+      post(2, e);
+    });
+    canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+  }
 
   let running = true;
   const frame = (timeMs) => {
@@ -426,6 +466,19 @@ function makeImports(ctx) {
       // is safe here as long as it is taken fresh.
       get(queue).writeBuffer(get(buffer), bufferOffset, bytes(dataPtr, dataLen));
     },
+    wgpu_queue_write_texture: (
+      queue, texture, mipLevel, x, y, z, width, height, depth,
+      dataPtr, dataLen, bytesPerRow, rowsPerImage,
+    ) => {
+      // Same freshness rule as writeBuffer: the copy is synchronous, but the
+      // view must be taken now because wasm memory can grow.
+      get(queue).writeTexture(
+        { texture: get(texture), mipLevel, origin: { x, y, z } },
+        bytes(dataPtr, dataLen),
+        { offset: 0, bytesPerRow, rowsPerImage },
+        { width, height, depthOrArrayLayers: depth },
+      );
+    },
 
     // -- Shaders -----------------------------------------------------------
     wgpu_device_create_shader_module: (dev, wgslPtr, wgslLen) => {
@@ -451,6 +504,7 @@ function makeImports(ctx) {
       topology, cullMode, frontFace,
       depthWrite, depthCompare,
       vertexStride, attrsPtr, attrsLen,
+      blendEnable, srcColor, dstColor, colorOp, srcAlpha, dstAlpha, alphaOp, writeMask,
     ) => {
       // Attributes arrive as a flat (location, format, offset) triple array
       // rather than a struct, so there is no field layout to keep in sync.
@@ -485,7 +539,18 @@ function makeImports(ctx) {
         desc.fragment = {
           module: get(fsModule),
           entryPoint: str(fsEntryPtr, fsEntryLen),
-          targets: [{ format: TEXTURE_FORMAT[colorFormat] }],
+          targets: [{
+            format: TEXTURE_FORMAT[colorFormat],
+            writeMask,
+            // Omitted entirely when disabled: WebGPU has no "blend off" flag,
+            // the absence of the member is what turns it off.
+            ...(blendEnable !== 0 ? {
+              blend: {
+                color: { srcFactor: BLEND_FACTOR[srcColor], dstFactor: BLEND_FACTOR[dstColor], operation: BLEND_OP[colorOp] },
+                alpha: { srcFactor: BLEND_FACTOR[srcAlpha], dstFactor: BLEND_FACTOR[dstAlpha], operation: BLEND_OP[alphaOp] },
+              },
+            } : {}),
+          }],
         };
       }
       const depth = TEXTURE_FORMAT[depthFormat];
@@ -504,6 +569,30 @@ function makeImports(ctx) {
       }
     },
 
+    wgpu_device_create_sampler: (
+      dev, magFilter, minFilter, mipmapFilter,
+      addressU, addressV, addressW, lodMin, lodMax, maxAnisotropy,
+    ) => put(get(dev).createSampler({
+      magFilter: FILTER_MODE[magFilter],
+      minFilter: FILTER_MODE[minFilter],
+      mipmapFilter: FILTER_MODE[mipmapFilter],
+      addressModeU: ADDRESS_MODE[addressU],
+      addressModeV: ADDRESS_MODE[addressV],
+      addressModeW: ADDRESS_MODE[addressW],
+      lodMinClamp: lodMin,
+      lodMaxClamp: lodMax,
+      maxAnisotropy,
+      // `compare` is deliberately omitted: a sampler that carries it becomes a
+      // comparison sampler and cannot bind against a plain texture_2d<f32>.
+    })),
+    wgpu_device_create_bind_group_textures: (dev, layout, entriesPtr, entriesLen) => {
+      const flat = u32().subarray(entriesPtr >> 2, (entriesPtr >> 2) + entriesLen);
+      const entries = [];
+      for (let i = 0; i < entriesLen; i += 2) {
+        entries.push({ binding: flat[i], resource: get(flat[i + 1]) });
+      }
+      return put(get(dev).createBindGroup({ layout: get(layout), entries }));
+    },
     wgpu_render_pipeline_get_bind_group_layout: (pipeline, index) => {
       try {
         return put(get(pipeline).getBindGroupLayout(index));

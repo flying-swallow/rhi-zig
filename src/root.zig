@@ -52,7 +52,10 @@ pub const io = struct {
 /// rhi module (a Zig port of the C++ engine's RIProgram). It bundles, for one
 /// set of shader stages, a pipeline layout, a hash-keyed pipeline cache, and
 /// descriptor sets resolved by name. Vulkan-complete; on Metal only the
-/// render-pipeline cache + push constants are supported today.
+/// render-pipeline cache + push constants are supported today. The names and
+/// `Descriptor` values it binds are core vocabulary, shared with the web
+/// backends' `Cmd.web_bind_descriptors`; what stays here is the descriptor-set
+/// machinery itself, which only Vulkan has.
 pub const rpi = struct {
     pub const Program = @import("rpi/program.zig");
     pub const binding = @import("rpi/binding.zig");
@@ -83,6 +86,12 @@ pub const Image = image.Image;
 pub const ImageView = image_view.ImageView;
 pub const ImageViewDesc = image_view.ViewDesc;
 pub const Descriptor = descriptor.Descriptor;
+/// A descriptor plus the shader-side name it is bound by. Shared vocabulary:
+/// `rpi.Program.bindDescriptors` resolves the name against the program's
+/// declared layout, `Cmd.web_bind_descriptors` against the pipeline's declared
+/// texture bindings.
+pub const DescriptorBinding = descriptor.DescriptorBinding;
+pub const DescriptorBindingID = descriptor.DescriptorBindingID;
 pub const Sampler = sampler.Sampler;
 pub const Format = format.Format;
 pub const Buffer = buffer.Buffer;
@@ -129,7 +138,7 @@ var cookie_counter: if (is_web) u64 else std.atomic.Value(u64) = if (is_web) 1 e
 /// changes**, and bump `GLUE_ABI_VERSION` in `src/webgpu/glue.js` to match. The
 /// glue refuses to boot on a mismatch, and `zig build test` checks the two
 /// constants agree.
-pub const glue_abi_version: u32 = 1;
+pub const glue_abi_version: u32 = 2;
 
 pub fn next_cookie() u64 {
     if (comptime is_web) {
@@ -282,6 +291,42 @@ test {
     _ = @import("cmd.zig");
     _ = @import("io/gltf/gltf.zig");
     _ = @import("segment_alloc.zig");
+}
+
+// The format table is data, and data rots silently: `GetProps` went years
+// without a reachable caller, and in that time drifted into code that did not
+// compile. This walks every format so both stay true.
+test "format: props table covers every format" {
+    for (std.enums.values(Format)) |fmt| {
+        const props = format.GetProps(fmt);
+        try std.testing.expectEqual(fmt, props.format);
+        if (fmt == .unknown) {
+            try std.testing.expectEqual(@as(u32, 0), props.stride);
+            continue;
+        }
+        try std.testing.expectEqualStrings(@tagName(fmt), props.name);
+        try std.testing.expect(props.stride > 0);
+        try std.testing.expect(props.block_width >= 1);
+        try std.testing.expect(props.block_height >= 1);
+        // Only a block-compressed format covers more than one texel per block.
+        if (!props.is_compressed) {
+            try std.testing.expectEqual(@as(u32, 1), props.block_width);
+            try std.testing.expectEqual(@as(u32, 1), props.block_height);
+        }
+    }
+}
+
+// Same trick as the rpi test below, for the Vulkan-only paths that read the
+// format table: neither had a reachable caller, so neither had ever been
+// analyzed.
+test "format: type-check the vulkan consumers of the props table" {
+    if (comptime !platform_has_api(.vk)) return error.SkipZigTest;
+    _ = &vulkan.VKImageAspectFlagsFromFormat;
+    const RL = resource_loader.ResourceLoader(resource_loader.DefaultResourceConfig);
+    _ = &RL.begin_copy_texture;
+    _ = &RL.end_copy_texture;
+    _ = &RL.begin_copy_buffer;
+    _ = &RL.end_copy_buffer;
 }
 
 // Type-check the whole Vulkan render-program path (rpi layer) without needing a

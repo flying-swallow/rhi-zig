@@ -31,6 +31,11 @@ pub const Command = union(enum) {
     set_viewport: rhi.cmd.Viewport,
     set_scissor: rhi.cmd.Rect,
     bind_pipeline: *rhi.Pipeline,
+    /// Raw handles rather than `*rhi.ImageView`: views are passed around by
+    /// value (`Swapchain.image_view` hands one out), so the recorder cannot
+    /// hold a pointer to a caller's temporary. Handles are stable and the
+    /// caller owns lifetime, the same contract as the buffer entries above.
+    bind_texture: struct { unit: u32, texture: webgl.Handle, sampler: webgl.Handle },
     bind_vertex_buffer: struct { buffer: *rhi.Buffer, slot: u32 },
     bind_index_buffer: struct { buffer: *rhi.Buffer, index_type: rhi.cmd.IndexType },
     /// Bytes live in the recorder's arena at `[offset, offset+len)`.
@@ -142,6 +147,9 @@ pub fn replay(recorder: *const Recorder, device: *rhi.Device) void {
             bound = pipeline;
             apply_pipeline(pipeline);
         },
+        .bind_texture => |t| {
+            webgl.gl_bind_texture_unit(t.unit, t.texture, t.sampler);
+        },
         .bind_vertex_buffer => |b| {
             if (bound) |pipeline| bind_vao(device, pipeline, b.buffer, null);
         },
@@ -196,6 +204,15 @@ fn apply_pipeline(pipeline: *rhi.Pipeline) void {
     webgl.gl_set_enabled(gl.CULL_FACE, @intFromBool(p.cull_enabled));
     if (p.cull_enabled) webgl.gl_cull_face(p.cull_mode);
     webgl.gl_front_face(p.front_face);
+    // GL blend state is global, so it has to be set on every bind rather than
+    // only when the pipeline enables it — otherwise a blended pipeline leaks
+    // into the next unblended one.
+    webgl.gl_set_enabled(gl.BLEND, @intFromBool(p.blend_enabled));
+    if (p.blend_enabled) {
+        webgl.gl_blend_func_separate(p.blend_src_color, p.blend_dst_color, p.blend_src_alpha, p.blend_dst_alpha);
+        webgl.gl_blend_equation_separate(p.blend_color_op, p.blend_alpha_op);
+    }
+    webgl.gl_color_mask(p.write_mask[0], p.write_mask[1], p.write_mask[2], p.write_mask[3]);
 }
 
 /// WebGL2 has no `ARB_vertex_attrib_binding`, so a VAO fuses the vertex format

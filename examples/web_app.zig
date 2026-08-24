@@ -31,13 +31,22 @@ pub const Window = struct {
     height: u32 = 0,
 };
 
-/// The web dispatches no events: there is no quit, and resizes are observed by
-/// polling the canvas size each frame, exactly as the examples already do for
-/// their native windows. The type exists so an example's `app_event` handler
-/// keeps the same signature on both platforms.
+/// Pointer events are dispatched; resizes are still observed by polling the
+/// canvas size each frame, exactly as the examples already do for their native
+/// windows, and there is no quit -- the page's lifetime is the app's.
+///
+/// The glue listens for *pointer* events rather than mouse events, so a touch
+/// drag works without a second code path.
 pub const Event = struct {
-    pub const Type = enum { none };
+    pub const Type = enum { none, pointer_motion, pointer_down, pointer_up };
+    pub const Button = enum(u8) { left = 0, middle = 1, right = 2 };
+
     type: Type = .none,
+    /// Canvas-relative, in backing-store pixels -- the same space `Window.width`
+    /// and `Window.height` are in, and top-left origin like every RHI rect.
+    x: f32 = 0,
+    y: f32 = 0,
+    button: Button = .left,
 };
 
 pub fn AppContext(comptime Context: type) type {
@@ -135,6 +144,12 @@ pub fn Application(comptime Context: type, handlers: struct {
         var window: Window = .{};
         var live: bool = false;
 
+        /// Pointer events arrive from JS between frames and are drained at the
+        /// top of the next one, so a handler never runs re-entrantly with
+        /// `iterate_handler`.
+        var event_queue: [64]Event = undefined;
+        var event_count: usize = 0;
+
         /// Referenced from the example with `comptime { _ = App.web_exports; }`
         /// so the symbols are emitted. `export` inside a generic type only
         /// reaches the binary if the namespace is referenced.
@@ -173,12 +188,62 @@ pub fn Application(comptime Context: type, handlers: struct {
             /// Called once per requestAnimationFrame with the canvas backing
             /// store size the glue just applied and the callback's
             /// high-resolution timestamp. Returns non-zero to stop the loop.
+            /// Queue one pointer event. Called by the glue from a DOM
+            /// listener, i.e. between frames.
+            export fn rhi_web_pointer_event(kind: u32, x: f32, y: f32, button: u32) void {
+                if (!live) return;
+                const t: Event.Type = switch (kind) {
+                    1 => .pointer_down,
+                    2 => .pointer_up,
+                    else => .pointer_motion,
+                };
+                const ev: Event = .{
+                    .type = t,
+                    .x = x,
+                    .y = y,
+                    .button = switch (button) {
+                        1 => .middle,
+                        2 => .right,
+                        else => .left,
+                    },
+                };
+
+                // Coalesce a run of motion onto the tail rather than appending.
+                // That caps the common flood and, crucially, guarantees a button
+                // event is never dropped in favour of a motion one -- losing a
+                // `pointer_up` mid-drag would strand whatever was being dragged.
+                if (t == .pointer_motion and event_count > 0 and
+                    event_queue[event_count - 1].type == .pointer_motion)
+                {
+                    event_queue[event_count - 1] = ev;
+                    return;
+                }
+                if (event_count == event_queue.len) {
+                    // Full, and the tail is a button event we must not lose.
+                    // Drop the oldest instead.
+                    std.mem.copyForwards(Event, event_queue[0 .. event_queue.len - 1], event_queue[1..]);
+                    event_count -= 1;
+                }
+                event_queue[event_count] = ev;
+                event_count += 1;
+            }
+
             export fn rhi_web_frame(width: u32, height: u32, time_ms: f64) i32 {
                 if (!live) return 1;
                 window.width = width;
                 window.height = height;
                 frame_time_ms = time_ms;
                 _ = context.frame_arean.reset(.retain_capacity);
+
+                const pending = event_count;
+                event_count = 0;
+                for (event_queue[0..pending]) |*ev| {
+                    const er = handlers.app_event(&context, ev) catch |err| {
+                        std.log.err("app_event failed: {t}", .{err});
+                        return 1;
+                    };
+                    if (er != .cont) return 1;
+                }
 
                 const rc = handlers.iterate_handler(&context) catch |err| {
                     std.log.err("iterate failed: {t}", .{err});

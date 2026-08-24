@@ -41,12 +41,16 @@ pub const FrontFace = enums.FrontFace;
 pub const CompareFunction = enums.CompareFunction;
 pub const IndexFormat = enums.IndexFormat;
 pub const VertexFormat = enums.VertexFormat;
+pub const BlendFactor = enums.BlendFactor;
+pub const BlendOperation = enums.BlendOperation;
 pub const FilterMode = enums.FilterMode;
 pub const AddressMode = enums.AddressMode;
 pub const BufferUsage = enums.BufferUsage;
 pub const TextureUsage = enums.TextureUsage;
 pub const to_wgpu_texture_format = enums.to_wgpu_texture_format;
 pub const from_wgpu_texture_format = enums.from_wgpu_texture_format;
+pub const to_wgpu_blend_factor = enums.to_wgpu_blend_factor;
+pub const to_wgpu_blend_op = enums.to_wgpu_blend_op;
 pub const is_depth_format = enums.is_depth_format;
 pub const to_wgpu_load_op = enums.to_wgpu_load_op;
 pub const to_wgpu_store_op = enums.to_wgpu_store_op;
@@ -116,6 +120,24 @@ pub extern "wgpu" fn wgpu_device_create_texture(
     dimension: TextureDimension,
     usage: u32,
 ) Handle;
+/// `GPUQueue.writeTexture` from wasm linear memory. Unlike a buffer-to-texture
+/// copy this has no 256-byte `bytesPerRow` alignment rule, which is why the
+/// backend uploads this way.
+pub extern "wgpu" fn wgpu_queue_write_texture(
+    queue: Handle,
+    texture: Handle,
+    mip_level: u32,
+    x: u32,
+    y: u32,
+    z: u32,
+    width: u32,
+    height: u32,
+    depth: u32,
+    data_ptr: [*]const u8,
+    data_len: u32,
+    bytes_per_row: u32,
+    rows_per_image: u32,
+) void;
 pub extern "wgpu" fn wgpu_texture_create_view(
     texture: Handle,
     format: TextureFormat,
@@ -167,6 +189,39 @@ pub extern "wgpu" fn wgpu_device_create_render_pipeline(
     vertex_stride: u32,
     attrs_ptr: [*]const u32,
     attrs_len: u32,
+    /// Non-zero attaches a `blend` member to the colour target; zero omits it,
+    /// which is how WebGPU spells "blending off".
+    blend_enable: u32,
+    src_color: BlendFactor,
+    dst_color: BlendFactor,
+    color_op: BlendOperation,
+    src_alpha: BlendFactor,
+    dst_alpha: BlendFactor,
+    alpha_op: BlendOperation,
+    /// `GPUColorWrite` bitmask: red 1, green 2, blue 4, alpha 8.
+    write_mask: u32,
+) Handle;
+pub extern "wgpu" fn wgpu_device_create_sampler(
+    device: Handle,
+    mag_filter: FilterMode,
+    min_filter: FilterMode,
+    mipmap_filter: FilterMode,
+    address_u: AddressMode,
+    address_v: AddressMode,
+    address_w: AddressMode,
+    lod_min: f32,
+    lod_max: f32,
+    max_anisotropy: u32,
+) Handle;
+/// Bind group holding textures and samplers. Entries cross as a flat array of
+/// `(binding, handle)` pairs rather than a struct, so there is no field layout
+/// for the JS side to drift out of sync with; a GPUTextureView and a GPUSampler
+/// are both just `resource`, so no kind tag is needed.
+pub extern "wgpu" fn wgpu_device_create_bind_group_textures(
+    device: Handle,
+    layout: Handle,
+    entries_ptr: [*]const u32,
+    entries_len: u32,
 ) Handle;
 pub extern "wgpu" fn wgpu_render_pipeline_get_bind_group_layout(pipeline: Handle, index: u32) Handle;
 pub extern "wgpu" fn wgpu_device_create_bind_group_uniform(

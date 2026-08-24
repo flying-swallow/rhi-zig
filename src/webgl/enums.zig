@@ -32,6 +32,42 @@ pub const gl = struct {
     pub const SCISSOR_TEST: u32 = 0x0C11;
     pub const RASTERIZER_DISCARD: u32 = 0x8C89;
 
+    // Blend factors
+    pub const ZERO: u32 = 0x0000;
+    pub const ONE: u32 = 0x0001;
+    pub const SRC_COLOR: u32 = 0x0300;
+    pub const ONE_MINUS_SRC_COLOR: u32 = 0x0301;
+    pub const SRC_ALPHA: u32 = 0x0302;
+    pub const ONE_MINUS_SRC_ALPHA: u32 = 0x0303;
+    pub const DST_ALPHA: u32 = 0x0304;
+    pub const ONE_MINUS_DST_ALPHA: u32 = 0x0305;
+    pub const DST_COLOR: u32 = 0x0306;
+    pub const ONE_MINUS_DST_COLOR: u32 = 0x0307;
+    pub const SRC_ALPHA_SATURATE: u32 = 0x0308;
+    pub const CONSTANT_COLOR: u32 = 0x8001;
+    pub const ONE_MINUS_CONSTANT_COLOR: u32 = 0x8002;
+    pub const CONSTANT_ALPHA: u32 = 0x8003;
+    pub const ONE_MINUS_CONSTANT_ALPHA: u32 = 0x8004;
+
+    // Blend equations
+    pub const FUNC_ADD: u32 = 0x8006;
+    pub const FUNC_SUBTRACT: u32 = 0x800A;
+    pub const FUNC_REVERSE_SUBTRACT: u32 = 0x800B;
+    pub const MIN: u32 = 0x8007;
+    pub const MAX: u32 = 0x8008;
+
+    // Texture filtering and wrapping
+    pub const NEAREST: u32 = 0x2600;
+    pub const LINEAR: u32 = 0x2601;
+    pub const NEAREST_MIPMAP_NEAREST: u32 = 0x2700;
+    pub const LINEAR_MIPMAP_NEAREST: u32 = 0x2701;
+    pub const NEAREST_MIPMAP_LINEAR: u32 = 0x2702;
+    pub const LINEAR_MIPMAP_LINEAR: u32 = 0x2703;
+    pub const CLAMP_TO_EDGE: u32 = 0x812F;
+    pub const REPEAT: u32 = 0x2901;
+    pub const MIRRORED_REPEAT: u32 = 0x8370;
+    pub const TEXTURE0: u32 = 0x84C0;
+
     // Face / winding
     pub const FRONT: u32 = 0x0404;
     pub const BACK: u32 = 0x0405;
@@ -68,6 +104,7 @@ pub const gl = struct {
 
     // Pixel formats
     pub const RED: u32 = 0x1903;
+    pub const RGBA_INTEGER: u32 = 0x8D99;
     pub const RG: u32 = 0x8227;
     pub const RGB: u32 = 0x1907;
     pub const RGBA: u32 = 0x1908;
@@ -86,6 +123,7 @@ pub const gl = struct {
     pub const R32F: u32 = 0x822E;
     pub const RG32F: u32 = 0x8230;
     pub const RGBA32F: u32 = 0x8814;
+    pub const RGBA16UI: u32 = 0x8D88;
     pub const RGB10_A2: u32 = 0x8059;
     pub const R11F_G11F_B10F: u32 = 0x8C3A;
     pub const RGB9_E5: u32 = 0x8C3D;
@@ -106,6 +144,12 @@ pub const gl = struct {
     pub const FLOAT_VEC3: u32 = 0x8B51;
     pub const FLOAT_VEC4: u32 = 0x8B52;
     pub const INT: u32 = 0x1404;
+    pub const INT_VEC2: u32 = 0x8B53;
+    pub const INT_VEC3: u32 = 0x8B54;
+    pub const INT_VEC4: u32 = 0x8B55;
+    pub const UNSIGNED_INT_VEC2: u32 = 0x8DC6;
+    pub const UNSIGNED_INT_VEC3: u32 = 0x8DC7;
+    pub const UNSIGNED_INT_VEC4: u32 = 0x8DC8;
     pub const FLOAT_MAT4: u32 = 0x8B5C;
 
     // getParameter names
@@ -139,6 +183,10 @@ const format_mappings = [_]FormatPair{
     .{ .r32_sfloat, .{ .internal_format = gl.R32F, .format = gl.RED, .type = gl.FLOAT } },
     .{ .rg32_sfloat, .{ .internal_format = gl.RG32F, .format = gl.RG, .type = gl.FLOAT } },
     .{ .rgba32_sfloat, .{ .internal_format = gl.RGBA32F, .format = gl.RGBA, .type = gl.FLOAT } },
+    // Integer formats are sampled with `texelFetch` through a `usampler2D` and
+    // are never filterable; `gl_create_texture_2d` defaults to NEAREST so they
+    // come out complete.
+    .{ .rgba16_uint, .{ .internal_format = gl.RGBA16UI, .format = gl.RGBA_INTEGER, .type = gl.UNSIGNED_SHORT } },
     .{ .r10_g10_b10_a2_unorm, .{ .internal_format = gl.RGB10_A2, .format = gl.RGBA, .type = gl.UNSIGNED_BYTE } },
     .{ .r11_g11_b10_ufloat, .{ .internal_format = gl.R11F_G11F_B10F, .format = gl.RGB, .type = gl.HALF_FLOAT } },
     .{ .r9_g9_b9_e5_unorm, .{ .internal_format = gl.RGB9_E5, .format = gl.RGB, .type = gl.HALF_FLOAT } },
@@ -197,6 +245,36 @@ pub fn to_gl_compare(op: enum { never, less, equal, less_equal, greater, not_equ
         .not_equal => gl.NOTEQUAL,
         .greater_equal => gl.GEQUAL,
         .always => gl.ALWAYS,
+    };
+}
+
+pub fn to_gl_blend_factor(f: rhi.pipeline.BlendFactor) u32 {
+    return switch (f) {
+        .zero => gl.ZERO,
+        .one => gl.ONE,
+        .src_color => gl.SRC_COLOR,
+        .one_minus_src_color => gl.ONE_MINUS_SRC_COLOR,
+        .dst_color => gl.DST_COLOR,
+        .one_minus_dst_color => gl.ONE_MINUS_DST_COLOR,
+        .src_alpha => gl.SRC_ALPHA,
+        .one_minus_src_alpha => gl.ONE_MINUS_SRC_ALPHA,
+        .dst_alpha => gl.DST_ALPHA,
+        .one_minus_dst_alpha => gl.ONE_MINUS_DST_ALPHA,
+        .constant_color => gl.CONSTANT_COLOR,
+        .one_minus_constant_color => gl.ONE_MINUS_CONSTANT_COLOR,
+        .constant_alpha => gl.CONSTANT_ALPHA,
+        .one_minus_constant_alpha => gl.ONE_MINUS_CONSTANT_ALPHA,
+        .src_alpha_saturate => gl.SRC_ALPHA_SATURATE,
+    };
+}
+
+pub fn to_gl_blend_op(op: rhi.pipeline.BlendOp) u32 {
+    return switch (op) {
+        .add => gl.FUNC_ADD,
+        .subtract => gl.FUNC_SUBTRACT,
+        .reverse_subtract => gl.FUNC_REVERSE_SUBTRACT,
+        .min => gl.MIN,
+        .max => gl.MAX,
     };
 }
 
@@ -275,4 +353,10 @@ test "webgl: format mapping covers what the examples need" {
     // WebGL2 has no renderable BGRA, so this must be reported rather than
     // silently swizzled.
     try std.testing.expectError(error.UnsupportedFormat, to_gl_format(.bgra8_unorm));
+
+    // The Slug atlas pair: an RGBA32F curve texture and an RGBA16UI band
+    // texture, both read with texelFetch.
+    try std.testing.expectEqual(gl.RGBA32F, (try to_gl_format(.rgba32_sfloat)).internal_format);
+    try std.testing.expectEqual(gl.RGBA16UI, (try to_gl_format(.rgba16_uint)).internal_format);
+    try std.testing.expectEqual(gl.RGBA_INTEGER, (try to_gl_format(.rgba16_uint)).format);
 }

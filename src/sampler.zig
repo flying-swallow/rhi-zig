@@ -22,12 +22,14 @@ backend: union(rhi.Backend) {
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
     mtl: if (rhi.platform_has_api(.mtl)) void else void,
-    // Samplers are outside the WebGPU backend's scope (examples 00-02 use none);
-    // `init` reports `error.UnsupportedBackend` rather than returning a stub.
-    wgpu: if (rhi.platform_has_api(.wgpu)) void else void,
-    // WebGL2 has no separate sampler object in the form the RHI models; filter
-    // state lives on the texture. Out of scope, like the WebGPU arm.
-    webgl: if (rhi.platform_has_api(.webgl)) void else void,
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct {
+        sampler: rhi.webgpu.Handle = .none,
+    } else void,
+    // WebGL2 has real sampler objects -- `createSampler` / `bindSampler` are
+    // core ES 3.0 -- so filter state does not have to live on the texture.
+    webgl: if (rhi.platform_has_api(.webgl)) struct {
+        sampler: rhi.webgl.Handle = .none,
+    } else void,
 },
 
 /// Build a sampler descriptor referencing this sampler (cookie derived from the
@@ -91,8 +93,97 @@ pub fn init(device: *rhi.Device, desc: struct {
         };
         const sampler = try dkb.createSampler(device.backend.vk.device, &sampler_create_info, null);
         return .{ .cookie = rhi.next_cookie(), .backend = .{ .vk = .{ .sampler = sampler } } };
-    } else if (rhi.is_target_selected(.dx12)) {} else if (rhi.is_target_selected(.mtl)) {}
+    }
+    if (rhi.is_target_selected(.wgpu)) {
+        const wgpu = rhi.webgpu;
+        const sampler = wgpu.wgpu_device_create_sampler(
+            device.backend.wgpu.device,
+            to_wgpu_filter(desc.mag_filter),
+            to_wgpu_filter(desc.min_filter),
+            to_wgpu_mip_filter(desc.mip_map_mode),
+            try to_wgpu_address(desc.address_u),
+            try to_wgpu_address(desc.address_v),
+            try to_wgpu_address(desc.address_w),
+            if (desc.set_lod_range) desc.min_lod else 0.0,
+            if (desc.set_lod_range) desc.max_lod else 32.0,
+            @intFromFloat(@max(1.0, desc.max_anisotropy)),
+        );
+        if (sampler.isNone()) return error.WebGPUSamplerCreationFailed;
+        return .{ .cookie = rhi.next_cookie(), .backend = .{ .wgpu = .{ .sampler = sampler } } };
+    }
+    if (rhi.is_target_selected(.webgl)) {
+        const webgl = rhi.webgl;
+        const sampler = webgl.gl_create_sampler(
+            // A mipmap-combined min filter makes a single-level texture
+            // incomplete, so it is only used when the caller actually declared
+            // a LOD range.
+            gl_min_filter(desc.min_filter, desc.mip_map_mode, desc.set_lod_range and desc.max_lod > 0),
+            gl_filter(desc.mag_filter),
+            try to_gl_address(desc.address_u),
+            try to_gl_address(desc.address_v),
+            try to_gl_address(desc.address_w),
+        );
+        if (sampler.isNone()) return error.WebGL2SamplerCreationFailed;
+        return .{ .cookie = rhi.next_cookie(), .backend = .{ .webgl = .{ .sampler = sampler } } };
+    }
     return error.UnsupportedBackend;
+}
+
+fn to_wgpu_filter(f: FilterType) rhi.webgpu.FilterMode {
+    return switch (f) {
+        .nearest => .nearest,
+        .linear => .linear,
+    };
+}
+
+fn to_wgpu_mip_filter(m: MipMapMode) rhi.webgpu.FilterMode {
+    return switch (m) {
+        .nearest => .nearest,
+        .linear => .linear,
+    };
+}
+
+/// `clamp_to_border` has no WebGPU or WebGL2 equivalent. Reported rather than
+/// quietly substituted, the same way `to_gl_format` treats `bgra8_unorm`.
+fn to_wgpu_address(a: AddressMode) !rhi.webgpu.AddressMode {
+    return switch (a) {
+        .mirror => .mirror_repeat,
+        .repeat => .repeat,
+        .clamp_to_edge => .clamp_to_edge,
+        .clamp_to_border => error.UnsupportedAddressMode,
+    };
+}
+
+fn gl_filter(f: FilterType) u32 {
+    return switch (f) {
+        .nearest => rhi.webgl.gl.NEAREST,
+        .linear => rhi.webgl.gl.LINEAR,
+    };
+}
+
+fn gl_min_filter(f: FilterType, mip: MipMapMode, use_mips: bool) u32 {
+    const gl = rhi.webgl.gl;
+    if (!use_mips) return gl_filter(f);
+    return switch (f) {
+        .nearest => switch (mip) {
+            .nearest => gl.NEAREST_MIPMAP_NEAREST,
+            .linear => gl.NEAREST_MIPMAP_LINEAR,
+        },
+        .linear => switch (mip) {
+            .nearest => gl.LINEAR_MIPMAP_NEAREST,
+            .linear => gl.LINEAR_MIPMAP_LINEAR,
+        },
+    };
+}
+
+fn to_gl_address(a: AddressMode) !u32 {
+    const gl = rhi.webgl.gl;
+    return switch (a) {
+        .mirror => gl.MIRRORED_REPEAT,
+        .repeat => gl.REPEAT,
+        .clamp_to_edge => gl.CLAMP_TO_EDGE,
+        .clamp_to_border => error.UnsupportedAddressMode,
+    };
 }
 
 pub fn deinit(self: *Sampler, device: *rhi.Device) void {
@@ -107,7 +198,11 @@ pub fn deinit(self: *Sampler, device: *rhi.Device) void {
         },
         .dx12 => {},
         .mtl => {},
-        .wgpu => {},
-        .webgl => {},
+        .wgpu => |w| {
+            if (comptime rhi.platform_has_api(.wgpu)) rhi.webgpu.wgpu_release(w.sampler);
+        },
+        .webgl => |w| {
+            if (comptime rhi.platform_has_api(.webgl)) rhi.webgl.gl_delete_sampler(w.sampler);
+        },
     }
 }

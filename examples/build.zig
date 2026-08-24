@@ -83,6 +83,11 @@ pub fn build(b: *std.Build) !void {
 
     // `apple` marks examples that have been ported to the backend-agnostic API
     // and therefore build on macOS/iOS (Metal). The others are still Vulkan-only.
+    const shaders_05 = [_]ShaderStage{
+        .{ .src = "05_texture.slang", .entry = "vertexMain", .stage = "vertex", .out = "05_texture.vert" },
+        .{ .src = "05_texture.slang", .entry = "fragmentMain", .stage = "fragment", .out = "05_texture.frag" },
+    };
+
     const examples = [_]struct {
         file: []const u8,
         name: []const u8,
@@ -91,6 +96,9 @@ pub fn build(b: *std.Build) !void {
         /// Ported to the WebGPU backend. The rest use features WebGPU cannot
         /// express (imgui's texture/sampler path, rpi's descriptor sets).
         web: bool = false,
+        /// Builds for a desktop (Vulkan) target. False for examples that
+        /// demonstrate a web-only path.
+        desktop: bool = true,
     }{
         .{ .file = "00Clear.zig", .name = "00_clear", .apple = true, .web = true },
         .{ .file = "01Shader.zig", .name = "01_shader", .shaders = shaders_01[0..], .apple = true, .web = true },
@@ -101,6 +109,12 @@ pub fn build(b: *std.Build) !void {
         // Software virtual texturing through the rpi layer. Vulkan-only: rpi's
         // name-resolved descriptor binding is not yet implemented on Metal.
         .{ .file = "04SVT.zig", .name = "04_svt", .shaders = shaders_04[0..], .apple = false },
+        // Textured + alpha-blended quad: the acceptance test for the web
+        // backends' texture upload, sampler and binding paths. Web-only, because
+        // `Cmd.web_bind_descriptors` targets `Pipeline.init_graphics`'s world
+        // -- on Vulkan and Metal the same descriptors go through `rpi`'s
+        // descriptor sets instead (see 04_svt).
+        .{ .file = "05Texture.zig", .name = "05_texture", .shaders = shaders_05[0..], .apple = false, .web = true, .desktop = false },
     };
     // Resolve the Slang compiler used to build example shaders: obtained from
     // the rhi dependency, which manages the prebuilt Slang download.
@@ -113,6 +127,7 @@ pub fn build(b: *std.Build) !void {
     for (examples) |example| {
         if (is_apple and !example.apple) continue;
         if (is_web and !example.web) continue;
+        if (!is_web and !is_apple and !example.desktop) continue;
 
         // Anonymous shader imports must land on whichever module actually
         // contains the `@embedFile` — the example, which is the root off the web

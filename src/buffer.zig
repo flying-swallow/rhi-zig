@@ -327,6 +327,62 @@ pub fn deinit(self: *Buffer, device: *rhi.Device) void {
 /// go through a fresh write path rather than reusing `mapped_region`.
 ///
 /// A no-op on every other backend, where `mapped_region` really is device memory.
+/// Write host bytes into the buffer at `offset`. This is the path for data that
+/// changes every frame.
+///
+/// `mapped_region` is the wrong tool for that on the web backends: neither
+/// WebGPU nor WebGL2 has a persistent host mapping, so the shadow that
+/// `init_general` hands out is pushed once by `flush` and then retired, leaving
+/// `mapped_region` null from the second frame on. This is the "fresh write
+/// path" `flush`'s doc comment points at.
+///
+/// On both web backends the write is a *queue* operation. WebGPU orders it
+/// before any later submit. WebGL2 issues it immediately, while draws are
+/// deferred to `Queue.submit`'s replay -- so a write recorded this frame still
+/// lands before the draw that reads it, because submit follows record in one
+/// ordered GL stream.
+pub fn write(self: *Buffer, device: *rhi.Device, offset: u32, bytes: []const u8) void {
+    if (bytes.len == 0) return;
+
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        // Before the first flush the shadow is still the buffer's contents, so
+        // writing through it keeps the single-flush ordering intact.
+        if (self.backend.wgpu.shadow) |shadow| {
+            @memcpy(shadow[offset..][0..bytes.len], bytes);
+            return;
+        }
+        rhi.webgpu.wgpu_queue_write_buffer(
+            device.backend.wgpu.queue,
+            self.backend.wgpu.buffer,
+            offset,
+            bytes.ptr,
+            @intCast(bytes.len),
+        );
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        if (self.backend.webgl.shadow) |shadow| {
+            @memcpy(shadow[offset..][0..bytes.len], bytes);
+            return;
+        }
+        rhi.webgl.gl_buffer_sub_data(
+            self.backend.webgl.target,
+            self.backend.webgl.buffer,
+            offset,
+            bytes.ptr,
+            @intCast(bytes.len),
+        );
+        return;
+    }
+
+    // Vulkan and Metal really do have a persistent mapping. A buffer without
+    // one is device-local, which is a caller error rather than something to
+    // paper over.
+    const region = self.mapped_region orelse
+        std.debug.panic("Buffer.write: buffer has no host mapping (create it with persistant_map)", .{});
+    @memcpy(region[offset..][0..bytes.len], bytes);
+}
+
 pub fn flush(self: *Buffer, device: *rhi.Device) void {
     if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
         const shadow = self.backend.wgpu.shadow orelse return;

@@ -101,7 +101,7 @@ pub fn VKImageAspectFlagsFromFormat(format: rhi.Format) rhi.vulkan.vk.ImageAspec
     const props = rhi.format.GetProps(format);
     var result = rhi.vulkan.vk.ImageAspectFlags{ .stencil = props.is_stencil, .depth = props.is_depth };
 
-    if (result.stencil || result.depth) {
+    if (result.stencil or result.depth) {
         return result;
     }
     result.color = true;

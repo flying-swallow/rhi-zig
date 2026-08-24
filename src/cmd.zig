@@ -776,6 +776,131 @@ pub fn bind_pipeline(self: *Cmd, device: *rhi.Device, pipeline: *rhi.Pipeline) v
     unreachable;
 }
 
+/// Bind named descriptors against the slots the pipeline declared in
+/// `texture_bindings`.
+///
+/// Same vocabulary as `rpi.Program.bindDescriptors` -- `rhi.Descriptor` values
+/// addressed by shader-side name -- but none of its machinery: the web backends
+/// have no descriptor sets. A WebGPU bind group is built from a whole
+/// pipeline-owned layout, and a WebGL2 texture unit is global state, so what a
+/// slot needs is the resource handle and nothing else.
+///
+/// All slots go at once because WebGPU builds a bind group from a whole layout
+/// in a single call; a per-slot API could not be mapped onto that without
+/// deferring group construction to draw time and tracking dirty slots.
+///
+/// The name carries the backend prefix because there is no desktop path:
+/// Vulkan and Metal return `error.UnsupportedBackend`, and there the same
+/// descriptors go through `rpi.Program.bindDescriptors`, which owns the
+/// descriptor-set layouts a set write needs. Call this after `bind_pipeline`.
+pub fn web_bind_descriptors(
+    self: *Cmd,
+    device: *rhi.Device,
+    pipeline: *rhi.Pipeline,
+    bindings: []const rhi.DescriptorBinding,
+) !void {
+    if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+        const w = &pipeline.backend.wgpu;
+        const slots = w.texture_bindings[0..w.texture_binding_count];
+        const resolved = try resolve_descriptor_slots(slots, bindings);
+        if (slots.len == 0) return;
+
+        // A renderer binds the same textures every frame, so the group is
+        // memoised against the identity of what went into it.
+        var key: u64 = 1469598103934665603;
+        for (resolved[0..slots.len]) |r| {
+            key = (key ^ if (r.texture) |d| d.cookie else 0) *% 1099511628211;
+            key = (key ^ if (r.sampler) |d| d.cookie else 0) *% 1099511628211;
+        }
+
+        if (w.texture_group.isNone() or w.texture_group_key != key) {
+            var entries: [rhi.pipeline.max_texture_bindings * 2 * 2]u32 = undefined;
+            var n: usize = 0;
+            for (slots, resolved[0..slots.len]) |slot, r| {
+                const tex = r.texture orelse return error.DescriptorMissing;
+                entries[n] = slot.binding;
+                entries[n + 1] = @intFromEnum(tex.backend.wgpu.handle);
+                n += 2;
+                if (slot.sampler_binding) |sb| {
+                    const smp = r.sampler orelse return error.SamplerRequired;
+                    entries[n] = sb;
+                    entries[n + 1] = @intFromEnum(smp.backend.wgpu.handle);
+                    n += 2;
+                }
+            }
+            const group = rhi.webgpu.wgpu_device_create_bind_group_textures(
+                device.backend.wgpu.device,
+                w.texture_group_layout,
+                &entries,
+                @intCast(n),
+            );
+            if (group.isNone()) return error.WebGPUBindGroupCreationFailed;
+            rhi.webgpu.wgpu_release(w.texture_group);
+            w.texture_group = group;
+            w.texture_group_key = key;
+        }
+        rhi.webgpu.wgpu_render_pass_set_bind_group(self.backend.wgpu.pass, 1, w.texture_group);
+        return;
+    }
+    if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+        const w = &pipeline.backend.webgl;
+        const slots = w.texture_bindings[0..w.texture_binding_count];
+        const resolved = try resolve_descriptor_slots(slots, bindings);
+        // A slot's index is its texture unit -- that is what the sampler
+        // uniforms were pointed at when the program was linked.
+        for (resolved[0..slots.len], 0..) |r, unit| {
+            const tex = r.texture orelse return error.DescriptorMissing;
+            self.backend.webgl.recorder.append(.{ .bind_texture = .{
+                .unit = @intCast(unit),
+                // A slot with no sampler descriptor leaves the unit's sampler
+                // object unbound, and the texture's own parameters apply.
+                .texture = tex.backend.webgl.handle,
+                .sampler = if (r.sampler) |smp| smp.backend.webgl.handle else .none,
+            } });
+        }
+        return;
+    }
+    return error.UnsupportedBackend;
+}
+
+/// One slot's gathered descriptors, indexed alongside the pipeline's slots.
+const ResolvedSlot = struct {
+    texture: ?*const rhi.Descriptor = null,
+    sampler: ?*const rhi.Descriptor = null,
+};
+
+/// Match each binding to the slot whose declared name it carries. Order-free:
+/// the caller lists bindings in whatever order reads well, as it does with
+/// `rpi.Program.bindDescriptors`.
+fn resolve_descriptor_slots(
+    slots: []const rhi.pipeline.TextureSlot,
+    bindings: []const rhi.DescriptorBinding,
+) ![rhi.pipeline.max_texture_bindings]ResolvedSlot {
+    var out: [rhi.pipeline.max_texture_bindings]ResolvedSlot = @splat(.{});
+    for (bindings) |*b| {
+        // An empty descriptor names an uncreated resource; `bindDescriptors`
+        // skips those, so this does too.
+        if (b.descriptor.isEmpty()) continue;
+        var matched = false;
+        // Every slot is checked, not just the first hit: one `SamplerState`
+        // shared by two textures is named by both their slots.
+        for (slots, 0..) |slot, i| {
+            if (slot.name_hash == b.handle.hash) {
+                if (b.descriptor.type != .sampled_image) return error.DescriptorTypeMismatch;
+                out[i].texture = &b.descriptor;
+                matched = true;
+            }
+            if (slot.sampler_name_hash) |h| if (h == b.handle.hash) {
+                if (b.descriptor.type != .sampler) return error.DescriptorTypeMismatch;
+                out[i].sampler = &b.descriptor;
+                matched = true;
+            };
+        }
+        if (!matched) return error.BindingNotFound;
+    }
+    return out;
+}
+
 pub fn draw(self: *Cmd, device: *rhi.Device, options: struct {
     vertex_count: u32,
     instance_count: u32 = 1,

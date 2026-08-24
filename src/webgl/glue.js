@@ -30,8 +30,10 @@ const GL = {
   UNSIGNED_SHORT: 0x1403,
   UNSIGNED_INT: 0x1405,
   FLOAT: 0x1406,
+  HALF_FLOAT: 0x140B,
   RGBA8: 0x8058,
   DEPTH_COMPONENT32F: 0x8CAC,
+  TEXTURE0: 0x84C0,
   COLOR_ATTACHMENT0: 0x8CE0,
   DEPTH_ATTACHMENT: 0x8D00,
   FRAMEBUFFER_COMPLETE: 0x8CD5,
@@ -43,6 +45,13 @@ const FLOAT_VEC2 = 0x8B50;
 const FLOAT_VEC3 = 0x8B51;
 const FLOAT_VEC4 = 0x8B52;
 const INT = 0x1404;
+const INT_VEC2 = 0x8B53;
+const INT_VEC3 = 0x8B54;
+const INT_VEC4 = 0x8B55;
+const UNSIGNED_INT = 0x1405;
+const UNSIGNED_INT_VEC2 = 0x8DC6;
+const UNSIGNED_INT_VEC3 = 0x8DC7;
+const UNSIGNED_INT_VEC4 = 0x8DC8;
 const FLOAT_MAT4 = 0x8B5C;
 
 export function makeWebglImports(ctx) {
@@ -118,16 +127,69 @@ export function makeWebglImports(ctx) {
       const t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
       gl.texStorage2D(gl.TEXTURE_2D, Math.max(1, levels), internalFormat, width, height);
-      // WebGL2 samples nothing without complete filter state, and the RHI has
-      // no separate sampler object on this backend.
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      // WebGL2 samples nothing without complete filter state. NEAREST rather
+      // than LINEAR, because integer formats (RGBA16UI) are never filterable
+      // and RGBA32F is not without OES_texture_float_linear -- a LINEAR default
+      // makes those textures *incomplete*, which samples as black with no
+      // error. A bound sampler object overrides this, so nothing is lost.
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
       gl.bindTexture(gl.TEXTURE_2D, null);
       return put(t);
     },
+    gl_tex_sub_image_2d: (h, level, x, y, w, hgt, format, type, ptr, len) => {
+      const t = get(h);
+      if (!t) return;
+      // Views are taken fresh every call: wasm memory can grow, which detaches
+      // any previously captured view.
+      let view;
+      switch (type) {
+        case GL.FLOAT: view = new Float32Array(wasm.memory.buffer, ptr, len >> 2); break;
+        case GL.UNSIGNED_SHORT:
+        case GL.HALF_FLOAT: view = new Uint16Array(wasm.memory.buffer, ptr, len >> 1); break;
+        default: view = new Uint8Array(wasm.memory.buffer, ptr, len); break;
+      }
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      // A tightly packed row of odd width is misread under the default
+      // 4-byte unpack alignment.
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texSubImage2D(gl.TEXTURE_2D, level, x, y, w, hgt, format, type, view);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    },
     gl_delete_texture: (h) => { const t = get(h); if (t) gl.deleteTexture(t); drop(h); },
+    gl_create_sampler: (minF, magF, wrapS, wrapT, wrapR) => {
+      const smp = gl.createSampler();
+      gl.samplerParameteri(smp, gl.TEXTURE_MIN_FILTER, minF);
+      gl.samplerParameteri(smp, gl.TEXTURE_MAG_FILTER, magF);
+      gl.samplerParameteri(smp, gl.TEXTURE_WRAP_S, wrapS);
+      gl.samplerParameteri(smp, gl.TEXTURE_WRAP_T, wrapT);
+      gl.samplerParameteri(smp, gl.TEXTURE_WRAP_R, wrapR);
+      return put(smp);
+    },
+    gl_delete_sampler: (h) => { const s = get(h); if (s) gl.deleteSampler(s); drop(h); },
+    gl_bind_texture_unit: (unit, texture, sampler) => {
+      gl.activeTexture(GL.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, get(texture));
+      // get(0) is null, which unbinds the sampler object and falls back to the
+      // texture's own parameters.
+      gl.bindSampler(unit, get(sampler));
+    },
+    gl_set_sampler_unit: (program, namePtr, nameLen, unit) => {
+      const p = get(program);
+      if (!p) return -1;
+      const loc = gl.getUniformLocation(p, str(namePtr, nameLen));
+      if (loc === null) return -1;
+      // Self-contained so it cannot perturb the deferred-replay state machine:
+      // the current program is saved and restored around the write.
+      const prev = gl.getParameter(gl.CURRENT_PROGRAM);
+      gl.useProgram(p);
+      gl.uniform1i(loc, unit);
+      gl.useProgram(prev);
+      return 0;
+    },
     gl_create_framebuffer: () => put(gl.createFramebuffer()),
     gl_delete_framebuffer: (h) => { const f = get(h); if (f) gl.deleteFramebuffer(f); drop(h); },
     gl_framebuffer_texture_2d: (fbo, attachment, texture) => {
@@ -219,7 +281,16 @@ export function makeWebglImports(ctx) {
         case FLOAT_VEC3: gl.uniform3fv(loc, f); break;
         case FLOAT_VEC4: gl.uniform4fv(loc, f); break;
         case FLOAT_MAT4: gl.uniformMatrix4fv(loc, false, f); break;
+        // Integer views are built fresh each call rather than cached: wasm
+        // memory can grow, which detaches any previously taken view.
         case INT: gl.uniform1iv(loc, new Int32Array(wasm.memory.buffer, ptr, len >> 2)); break;
+        case INT_VEC2: gl.uniform2iv(loc, new Int32Array(wasm.memory.buffer, ptr, len >> 2)); break;
+        case INT_VEC3: gl.uniform3iv(loc, new Int32Array(wasm.memory.buffer, ptr, len >> 2)); break;
+        case INT_VEC4: gl.uniform4iv(loc, new Int32Array(wasm.memory.buffer, ptr, len >> 2)); break;
+        case UNSIGNED_INT: gl.uniform1uiv(loc, new Uint32Array(wasm.memory.buffer, ptr, len >> 2)); break;
+        case UNSIGNED_INT_VEC2: gl.uniform2uiv(loc, new Uint32Array(wasm.memory.buffer, ptr, len >> 2)); break;
+        case UNSIGNED_INT_VEC3: gl.uniform3uiv(loc, new Uint32Array(wasm.memory.buffer, ptr, len >> 2)); break;
+        case UNSIGNED_INT_VEC4: gl.uniform4uiv(loc, new Uint32Array(wasm.memory.buffer, ptr, len >> 2)); break;
         default: console.warn(`[rhi] unhandled uniform type 0x${type.toString(16)}`);
       }
     },
@@ -253,6 +324,8 @@ export function makeWebglImports(ctx) {
     gl_cull_face: (m) => gl.cullFace(m),
     gl_front_face: (m) => gl.frontFace(m),
     gl_color_mask: (r, g, b, a) => gl.colorMask(!!r, !!g, !!b, !!a),
+    gl_blend_func_separate: (sRGB, dRGB, sA, dA) => gl.blendFuncSeparate(sRGB, dRGB, sA, dA),
+    gl_blend_equation_separate: (mRGB, mA) => gl.blendEquationSeparate(mRGB, mA),
 
     // -- Clears and draws --------------------------------------------------
     gl_clear_color: (r, g, b, a) => {

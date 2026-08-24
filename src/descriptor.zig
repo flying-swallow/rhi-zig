@@ -28,11 +28,13 @@ backend: union(rhi.Backend) {
     } else void,
     dx12: if (rhi.platform_has_api(.dx12)) void else void,
     mtl: if (rhi.platform_has_api(.mtl)) void else void,
-    // Descriptors and descriptor sets are outside the WebGPU backend's scope:
-    // render pipelines use `layout: "auto"` and the only binding the examples
-    // need is the push-constant uniform the pipeline owns itself.
-    wgpu: if (rhi.platform_has_api(.wgpu)) void else void,
-    webgl: if (rhi.platform_has_api(.webgl)) void else void,
+    // The web backends have no descriptor *sets*: a WebGPU bind group is built
+    // from a whole pipeline-owned layout and a GL texture unit is plain global
+    // state. What survives is the resource handle, which both backends address
+    // as a single id -- `type` says whether it is a texture or a sampler.
+    // `Cmd.web_bind_descriptors` consumes these.
+    wgpu: if (rhi.platform_has_api(.wgpu)) struct { handle: rhi.webgpu.Handle } else void,
+    webgl: if (rhi.platform_has_api(.webgl)) struct { handle: rhi.webgl.Handle } else void,
 } = undefined,
 
 pub fn isEmpty(self: Descriptor) bool {
@@ -102,6 +104,22 @@ pub fn sampledImage(device: *rhi.Device,view: *const rhi.ImageView) Descriptor {
             } },
         };
     }
+    if (rhi.is_target_selected(.wgpu)) {
+        // The wgpu arm of `ImageView.backend` is the handle itself, not a
+        // struct wrapping one.
+        return .{
+            .cookie = derive(view.cookie, .sampled_image, 0, 0),
+            .type = .sampled_image,
+            .backend = .{ .wgpu = .{ .handle = view.backend.wgpu } },
+        };
+    }
+    if (rhi.is_target_selected(.webgl)) {
+        return .{
+            .cookie = derive(view.cookie, .sampled_image, 0, 0),
+            .type = .sampled_image,
+            .backend = .{ .webgl = .{ .handle = view.backend.webgl.texture } },
+        };
+    }
     return .{};
 }
 
@@ -156,5 +174,53 @@ pub fn sampler(device: *rhi.Device,s: *const rhi.Sampler) Descriptor {
             } },
         };
     }
+    if (rhi.is_target_selected(.wgpu)) {
+        return .{
+            .cookie = derive(s.cookie, .sampler, 0, 0),
+            .type = .sampler,
+            .backend = .{ .wgpu = .{ .handle = s.backend.wgpu.sampler } },
+        };
+    }
+    if (rhi.is_target_selected(.webgl)) {
+        return .{
+            .cookie = derive(s.cookie, .sampler, 0, 0),
+            .type = .sampler,
+            .backend = .{ .webgl = .{ .handle = s.backend.webgl.sampler } },
+        };
+    }
     return .{};
 }
+
+// ---- Named bindings ------------------------------------------------------
+// A descriptor plus the shader-side name it is addressed by. Core rather than
+// rpi-local, because both binding paths speak it: `rpi.Program.bindDescriptors`
+// resolves the name against a `rpi.Layout`, `Cmd.web_bind_descriptors`
+// against the pipeline's declared `texture_bindings`.
+
+/// Stable identity for a named descriptor binding. The hash is what the binders
+/// look up; the name is kept for diagnostics. Mirrors `DescriptorBindingID`.
+pub const DescriptorBindingID = struct {
+    name: []const u8,
+    hash: u64,
+
+    pub fn create(name: []const u8) DescriptorBindingID {
+        return .{ .name = name, .hash = std.hash.Wyhash.hash(0, name) };
+    }
+};
+
+/// A live binding handed to a binder: a name handle + the descriptor to write at
+/// it, optionally offset within an array. Mirrors
+/// `RIProgram::DescriptorBinding`.
+pub const DescriptorBinding = struct {
+    handle: DescriptorBindingID,
+    register_offset: u32 = 0,
+    descriptor: Descriptor,
+
+    pub fn init(name: []const u8, desc: Descriptor, register_offset: u32) DescriptorBinding {
+        return .{
+            .handle = DescriptorBindingID.create(name),
+            .register_offset = register_offset,
+            .descriptor = desc,
+        };
+    }
+};

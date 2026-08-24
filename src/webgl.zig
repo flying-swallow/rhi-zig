@@ -259,6 +259,42 @@ pub extern "webgl" fn gl_copy_buffer_sub_data(src_target: u32, src: Handle, src_
 // Textures and framebuffers
 pub extern "webgl" fn gl_create_texture_2d(internal_format: u32, width: u32, height: u32, levels: u32) Handle;
 pub extern "webgl" fn gl_delete_texture(texture: Handle) void;
+/// `texSubImage2D` from wasm linear memory. `format`/`type` are the GL pair for
+/// the texture's `rhi.Format`, from `to_gl_format`.
+pub extern "webgl" fn gl_tex_sub_image_2d(
+    texture: Handle,
+    level: u32,
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    format: u32,
+    type: u32,
+    ptr: [*]const u8,
+    len: u32,
+) void;
+/// ES 3.0 sampler object. Filter and wrap state lives here rather than on the
+/// texture, so one texture can be read with different sampling in two draws.
+pub extern "webgl" fn gl_create_sampler(
+    min_filter: u32,
+    mag_filter: u32,
+    wrap_s: u32,
+    wrap_t: u32,
+    wrap_r: u32,
+) Handle;
+pub extern "webgl" fn gl_delete_sampler(sampler: Handle) void;
+/// Bind a texture (and optionally a sampler object) to a texture unit.
+/// A `.none` sampler unbinds the unit's sampler, falling back to the texture's
+/// own parameters.
+pub extern "webgl" fn gl_bind_texture_unit(unit: u32, texture: Handle, sampler: Handle) void;
+/// Point a `sampler2D` uniform at a texture unit. Done once at link time.
+/// Returns 0 on success, -1 when the program has no such uniform.
+pub extern "webgl" fn gl_set_sampler_unit(
+    program: Handle,
+    name_ptr: [*]const u8,
+    name_len: u32,
+    unit: u32,
+) i32;
 pub extern "webgl" fn gl_create_framebuffer() Handle;
 pub extern "webgl" fn gl_delete_framebuffer(fbo: Handle) void;
 /// `attachment` is `GL_COLOR_ATTACHMENT0` or `GL_DEPTH_ATTACHMENT`.
@@ -327,6 +363,8 @@ pub extern "webgl" fn gl_depth_mask(enabled: u32) void;
 pub extern "webgl" fn gl_cull_face(mode: u32) void;
 pub extern "webgl" fn gl_front_face(mode: u32) void;
 pub extern "webgl" fn gl_color_mask(r: u32, g: u32, b: u32, a: u32) void;
+pub extern "webgl" fn gl_blend_func_separate(src_rgb: u32, dst_rgb: u32, src_alpha: u32, dst_alpha: u32) void;
+pub extern "webgl" fn gl_blend_equation_separate(mode_rgb: u32, mode_alpha: u32) void;
 
 // Clears and draws
 pub extern "webgl" fn gl_clear_color(r: f32, g: f32, b: f32, a: f32) void;

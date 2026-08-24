@@ -248,6 +248,133 @@ pub fn init(
     return error.UnsupportedBackend;
 }
 
+/// Bytes per texel, for the row pitch `GPUQueue.writeTexture` requires.
+///
+/// `rhi.format.GetProps` already carries this as `stride` (bytes per block, and
+/// a plain format's block is one texel), so the value comes from there. The
+/// narrowing is the caller's, not the table's: this upload path computes a row
+/// pitch per texel, so a block-compressed format -- whose pitch is
+/// `width / block_width * stride` -- and a depth/stencil format, which
+/// `writeTexture` cannot take at all, are reported rather than guessed.
+fn texel_size(format: rhi.Format) !u32 {
+    const props = rhi.format.GetProps(format);
+    if (props.stride == 0 or props.is_compressed) return error.UnsupportedFormat;
+    if (props.block_width != 1 or props.block_height != 1) return error.UnsupportedFormat;
+    if (props.is_depth or props.is_stencil) return error.UnsupportedFormat;
+    return props.stride;
+}
+
+/// Upload host pixels straight into one mip level of this texture.
+///
+/// This exists rather than routing everything through
+/// `Cmd.copy_buffer_to_texture` because the browser does not want a staging
+/// buffer: `GPUQueue.writeTexture` and `texSubImage2D` both take CPU memory
+/// directly, and WebGPU's buffer-to-texture copy additionally imposes a
+/// `bytesPerRow % 256` rule that `writeTexture` has no equivalent of. On
+/// WebGL2 a buffer source would need `PIXEL_UNPACK_BUFFER`, which collides with
+/// the target locking `gl_create_buffer` fixes for a buffer's lifetime.
+///
+/// It is a one-shot, blocking call meant for load-time uploads. On Vulkan it
+/// stages, submits and waits; on the web backends it is a queue operation
+/// ordered before any later submit.
+pub fn write(self: *Image, device: *rhi.Device, options: struct {
+    data: []const u8,
+    mip_level: u32 = 0,
+    x: u32 = 0,
+    y: u32 = 0,
+    width: u32,
+    height: u32,
+    /// Vulkan only: the state the image is in right now. The default suits a
+    /// freshly created image; pass `.{ .shader_resource = true }` to overwrite
+    /// one that is already being sampled.
+    current_state: rhi.cmd.ResourceState = .{},
+}) !void {
+    if (options.data.len == 0) return;
+
+    if (rhi.is_target_selected(.webgl)) {
+        const webgl = rhi.webgl;
+        const fmt = try webgl.to_gl_format(self.backend.webgl.format);
+        webgl.gl_tex_sub_image_2d(
+            self.backend.webgl.texture,
+            options.mip_level,
+            options.x,
+            options.y,
+            options.width,
+            options.height,
+            fmt.format,
+            fmt.type,
+            options.data.ptr,
+            @intCast(options.data.len),
+        );
+        return;
+    }
+    if (rhi.is_target_selected(.wgpu)) {
+        const wgpu = rhi.webgpu;
+        const texel = try texel_size(self.backend.wgpu.format);
+        wgpu.wgpu_queue_write_texture(
+            device.backend.wgpu.queue,
+            self.backend.wgpu.texture,
+            options.mip_level,
+            options.x,
+            options.y,
+            0,
+            options.width,
+            options.height,
+            1,
+            options.data.ptr,
+            @intCast(options.data.len),
+            options.width * texel,
+            options.height,
+        );
+        return;
+    }
+    if (rhi.is_target_selected(.vk)) {
+        // Vulkan is the one backend that genuinely needs a staging copy. Doing
+        // it here keeps callers off the barrier dance for a load-time upload.
+        var staging: rhi.Buffer = try .init_general(device, .{
+            .size = options.data.len,
+            .persistant_map = true,
+            .sequential_access = true,
+            .buffer_usage = .prefer_host,
+            .usage = .{},
+        });
+        defer staging.deinit(device);
+        @memcpy(staging.mapped_region.?[0..options.data.len], options.data);
+
+        var pool = try rhi.Pool.init(device, &device.graphics_queue);
+        defer pool.deinit(device);
+        var cmd = try rhi.Cmd.init(device, &pool);
+        defer cmd.deinit(device, &pool);
+
+        try cmd.begin(device);
+        cmd.image_barrier(device, .{
+            .image = self,
+            .before = options.current_state,
+            .after = .{ .copy_dst = true },
+        });
+        cmd.copy_buffer_to_texture(device, .{
+            .src = &staging,
+            .dst = self,
+            .buffer_offset = 0,
+            .mip_level = options.mip_level,
+            .x = @intCast(options.x),
+            .y = @intCast(options.y),
+            .width = options.width,
+            .height = options.height,
+        });
+        cmd.image_barrier(device, .{
+            .image = self,
+            .before = .{ .copy_dst = true },
+            .after = .{ .shader_resource = true },
+        });
+        try cmd.end(device);
+        try device.graphics_queue.submit(device, .{ .vk = .{ .cmds = &.{&cmd} } });
+        try device.graphics_queue.wait_queue_idle(device);
+        return;
+    }
+    return error.UnsupportedBackend;
+}
+
 pub fn deinit(self: *Image, device: *rhi.Device) void {
     if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
         if (self.backend.vk.allocation) |alloc| {
