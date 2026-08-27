@@ -20,6 +20,7 @@ const std = @import("std");
 pub const BlendFactor = rhi.pipeline.BlendFactor;
 pub const BlendOp = rhi.pipeline.BlendOp;
 pub const WriteMask = rhi.pipeline.WriteMask;
+pub const CompareOp = rhi.pipeline.CompareOp;
 
 pub const Topology = enum(u8) {
     point_list,
@@ -59,43 +60,6 @@ pub const CullMode = enum(u8) {
             .none => .{},
             .front => .{ .front = true },
             .back => .{ .back = true },
-        };
-    }
-};
-
-pub const CompareOp = enum(u8) {
-    never,
-    less,
-    equal,
-    less_equal,
-    greater,
-    not_equal,
-    greater_equal,
-    always,
-
-    pub fn to_vk(self: CompareOp) rhi.vulkan.vk.CompareOp {
-        return switch (self) {
-            .never => .never,
-            .less => .less,
-            .equal => .equal,
-            .less_equal => .less_or_equal,
-            .greater => .greater,
-            .not_equal => .not_equal,
-            .greater_equal => .greater_or_equal,
-            .always => .always,
-        };
-    }
-
-    pub fn to_mtl(self: CompareOp) rhi.metal.types.CompareFunction {
-        return switch (self) {
-            .never => .never,
-            .less => .less,
-            .equal => .equal,
-            .less_equal => .less_equal,
-            .greater => .greater,
-            .not_equal => .not_equal,
-            .greater_equal => .greater_equal,
-            .always => .always,
         };
     }
 };

@@ -123,7 +123,11 @@ pub const gl = struct {
     pub const R32F: u32 = 0x822E;
     pub const RG32F: u32 = 0x8230;
     pub const RGBA32F: u32 = 0x8814;
-    pub const RGBA16UI: u32 = 0x8D88;
+    // 0x8D76, not 0x8D88 -- the latter is GL_RGBA16I, the *signed* format.
+    // Storing the signed one made `texStorage2D` allocate a format that
+    // `texSubImage2D` could not then upload RGBA_INTEGER/UNSIGNED_SHORT into,
+    // which is how the Slug band texture arrived as an empty sampler.
+    pub const RGBA16UI: u32 = 0x8D76;
     pub const RGB10_A2: u32 = 0x8059;
     pub const R11F_G11F_B10F: u32 = 0x8C3A;
     pub const RGB9_E5: u32 = 0x8C3D;
@@ -233,9 +237,7 @@ pub fn index_type_size(t: rhi.cmd.IndexType) u32 {
     };
 }
 
-/// `Pipeline.init_graphics` hardcodes `depth_compare = less` when depth testing
-/// is on; this exists so the full descriptor path can map the rest later.
-pub fn to_gl_compare(op: enum { never, less, equal, less_equal, greater, not_equal, greater_equal, always }) u32 {
+pub fn to_gl_compare(op: rhi.pipeline.CompareOp) u32 {
     return switch (op) {
         .never => gl.NEVER,
         .less => gl.LESS,

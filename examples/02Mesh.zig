@@ -280,12 +280,12 @@ fn app_init(app_context: *platform.AppContext(Context), window: *platform.Window
     };
     cntx.pipeline = try rhi.Pipeline.init_graphics(&cntx.device, .{
         .shader = &cntx.shader,
-        .swapchain = &cntx.swapchain.inner,
+        .colors = &.{.{ .format = cntx.swapchain.inner.color_format() }},
         .vertex_layout = .{ .stride = @sizeOf(f32) * 3, .attributes = &.{
             .{ .location = 0, .format = .float3, .offset = 0 },
         } },
         .push_constant_size = @sizeOf(PushConsts),
-        .depth_test = true,
+        .depth = .{ .format = .d32_sfloat },
     });
     cntx.depth_image = try rhi.Image.init(&cntx.device, .{
         .format = .d32_sfloat,

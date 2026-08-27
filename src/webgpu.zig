@@ -51,6 +51,7 @@ pub const to_wgpu_texture_format = enums.to_wgpu_texture_format;
 pub const from_wgpu_texture_format = enums.from_wgpu_texture_format;
 pub const to_wgpu_blend_factor = enums.to_wgpu_blend_factor;
 pub const to_wgpu_blend_op = enums.to_wgpu_blend_op;
+pub const to_wgpu_compare = enums.to_wgpu_compare;
 pub const is_depth_format = enums.is_depth_format;
 pub const to_wgpu_load_op = enums.to_wgpu_load_op;
 pub const to_wgpu_store_op = enums.to_wgpu_store_op;

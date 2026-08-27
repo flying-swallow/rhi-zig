@@ -230,12 +230,14 @@ fn app_init(app_context: *platform.AppContext(Context), window: *platform.Window
 
     cntx.pipeline = try rhi.Pipeline.init_graphics(&cntx.device, .{
         .shader = &cntx.shader,
-        .swapchain = &cntx.swapchain.inner,
+        .colors = &.{.{
+            .format = cntx.swapchain.inner.color_format(),
+            .blend = .straight_alpha,
+        }},
         .vertex_layout = .{ .stride = @sizeOf(Vertex), .attributes = &.{
             .{ .location = 0, .format = .float2, .offset = 0 },
             .{ .location = 1, .format = .float2, .offset = 8 },
         } },
-        .blend = .straight_alpha,
         .texture_bindings = &.{
             .{ .name = "tex", .binding = 0, .sampler_name = "smp", .sampler_binding = 1 },
         },

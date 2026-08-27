@@ -66,6 +66,12 @@ const PipelineSlot = union {
         render: ?rhi.metal.mtl.RenderPipelineState = null,
         primitive: rhi.metal.types.PrimitiveType = .triangle,
     }),
+    /// WebGPU and WebGL2 share one arm: both are reached only on wasm, both are
+    /// compiled in together, and both build the same core `rhi.Pipeline`. The
+    /// `.wgpu` gate therefore reads as "this is a web target".
+    web: rhi.wrapper_platform_type(.wgpu, struct {
+        handle: rhi.Pipeline,
+    }),
 };
 
 /// Per descriptor-set state (pool sizing + the vk allocator/layout).
@@ -121,6 +127,19 @@ backend: union {
         layout_count: u32 = 0,
     }),
     mtl: rhi.wrapper_platform_type(.mtl, struct {}),
+    web: rhi.wrapper_platform_type(.wgpu, struct {
+        /// Built once in `initialize`: the web backends compile a shader per
+        /// program, not per pipeline.
+        shader: rhi.Shader = undefined,
+        /// Derived from the explicit layout, owned by the Program. The core
+        /// pipeline borrows this slice, so it must outlive every pipeline in
+        /// the cache.
+        texture_bindings: []rhi.pipeline.TextureBinding = &.{},
+        /// The pipeline `bindPipeline` last bound. `pushConstants` and
+        /// `bindDescriptors` need it: on the web both are addressed through the
+        /// pipeline's own layout rather than a standalone pipeline layout.
+        bound: ?*rhi.Pipeline = null,
+    }),
 } = undefined,
 
 // ---------------------------------------------------------------------------
@@ -140,7 +159,7 @@ pub fn initialize(
     // Copy shader binaries + entry points into per-stage slots (all backends).
     errdefer self.free_shader_bins();
     for (modules) |m| {
-        const idx = @intFromEnum(m.stage);
+        const idx = @backingInt(m.stage);
         const buf = try allocator.dupe(u8, m.data);
         errdefer allocator.free(buf);
         const entry = try allocator.allocSentinel(u8, m.entry_point.len, 0);
@@ -167,7 +186,156 @@ pub fn initialize(
         self.backend = .{ .mtl = .{} };
         return self;
     }
+    if (comptime rhi.platform_has_api(.wgpu)) {
+        self.backend = .{ .web = .{} };
+        try self.initialize_web(device, layout);
+        return self;
+    }
     return error.UnsupportedBackend;
+}
+
+// ---- Web (WebGPU / WebGL2) ------------------------------------------------
+
+/// Compiles the program's stages and turns the explicit layout into the
+/// `TextureBinding` table the core pipeline wants.
+///
+/// The web backends have no descriptor sets: a WebGPU bind group is built from
+/// a whole pipeline-owned layout and a WebGL2 texture unit is global state, so
+/// what a slot needs is a name and an index. That is why the sampler is folded
+/// into its image's entry here instead of staying a binding of its own.
+fn initialize_web(self: *Program, device: *rhi.Device, layout: Layout) !void {
+    const vs = self.shader_bin[@backingInt(ProgramStage.vertex)];
+    const fs = self.shader_bin[@backingInt(ProgramStage.fragment)];
+
+    self.backend.web.shader = try rhi.Shader.init_graphics_shader(device, .{
+        .vertex_stage = if (vs.buf.len > 0)
+            .{ .data = vs.buf, .entry_point = vs.entry_point }
+        else
+            null,
+        .fragment_stage = if (fs.buf.len > 0)
+            .{ .data = fs.buf, .entry_point = fs.entry_point }
+        else
+            null,
+    });
+    errdefer self.backend.web.shader.deinit(device);
+
+    var textures: std.ArrayListUnmanaged(rhi.pipeline.TextureBinding) = .empty;
+    errdefer textures.deinit(self.allocator);
+    for (layout.bindings) |b| {
+        if (b.descriptor_type != .sampled_image) continue;
+        // Pair with the sampler declared in the same set, if there is one. A
+        // shader that only ever `Load`s (integer texel fetch) declares none,
+        // and must not be given one: WebGPU validates the bind group against
+        // the layout the shader actually declares.
+        // Both stay null when there is none: a `sampler_binding` with no name
+        // is unaddressable, and the core layer rejects that pairing outright.
+        var sampler_name: ?[]const u8 = null;
+        var sampler_binding: ?u32 = null;
+        for (layout.bindings) |c| {
+            if (c.descriptor_type != .sampler or c.set != b.set) continue;
+            sampler_name = c.name;
+            sampler_binding = c.binding;
+            break;
+        }
+        try textures.append(self.allocator, .{
+            .name = b.name,
+            .binding = b.binding,
+            .sampler_name = sampler_name,
+            .sampler_binding = sampler_binding,
+        });
+    }
+    self.backend.web.texture_bindings = try textures.toOwnedSlice(self.allocator);
+}
+
+/// Builds (and caches by `pipeline_hash`) the core pipeline and binds it.
+fn bindPipelineWeb(
+    self: *Program,
+    device: *rhi.Device,
+    cmd: *rhi.Cmd,
+    pipeline_hash: u64,
+    desc: GraphicsPipelineDesc,
+) !void {
+    const gop = try self.pipeline.getOrPut(self.allocator, pipeline_hash);
+    if (!gop.found_existing) {
+        errdefer _ = self.pipeline.remove(pipeline_hash);
+
+        // `init_graphics` describes one vertex stream, which is all the web
+        // backends expose. A second stream would be silently ignored, so say so.
+        if (desc.vertex_streams.len > 1) return error.Unsupported;
+
+        var attrs: std.ArrayListUnmanaged(rhi.pipeline.VertexAttribute) = .empty;
+        defer attrs.deinit(self.allocator);
+        for (desc.vertex_attributes) |a| {
+            try attrs.append(self.allocator, .{
+                .location = a.location,
+                .format = try to_web_vertex_format(a.format),
+                .offset = a.offset,
+            });
+        }
+
+        // An entry with no format is an unused attachment slot, the same
+        // reading the Metal path gives it. Every declared target is passed
+        // through: the web arms of `init_graphics` reject more than one, rather
+        // than this layer silently rendering to the first.
+        var colors: std.ArrayListUnmanaged(rhi.pipeline.ColorTarget) = .empty;
+        defer colors.deinit(self.allocator);
+        for (desc.colors) |c| {
+            const format = c.format orelse continue;
+            try colors.append(self.allocator, .{
+                .format = format,
+                .blend = if (c.blend_enabled) .{
+                    .src_color = c.src_color,
+                    .dst_color = c.dst_color,
+                    .color_op = c.color_blend_op,
+                    .src_alpha = c.src_alpha,
+                    .dst_alpha = c.dst_alpha,
+                    .alpha_op = c.alpha_blend_op,
+                    .write_mask = c.write_mask,
+                } else null,
+            });
+        }
+
+        gop.value_ptr.* = .{
+            .web = .{
+                // `init_graphics` reads these slices during the call and copies
+                // what it keeps, so the temporaries above outlive their use.
+                .handle = try rhi.Pipeline.init_graphics(device, .{
+                    .shader = &self.backend.web.shader,
+                    // Formats, not a swapchain: the rpi layer renders through
+                    // dynamic rendering and knows its targets only as formats.
+                    .colors = colors.items,
+                    .vertex_layout = if (desc.vertex_streams.len > 0) .{
+                        .stride = desc.vertex_streams[0].stride,
+                        .attributes = attrs.items,
+                    } else null,
+                    .push_constant_size = self.push_constant_size,
+                    .depth = if (desc.depth_test_enable) .{
+                        .format = desc.depth_stencil_format orelse .d32_sfloat,
+                        .write = desc.depth_write_enable,
+                        .compare = desc.depth_compare_op,
+                    } else null,
+                    .texture_bindings = self.backend.web.texture_bindings,
+                }),
+            },
+        };
+    }
+
+    const slot = &gop.value_ptr.web.handle;
+    cmd.bind_pipeline(device, slot);
+    self.backend.web.bound = slot;
+}
+
+/// The web vertex layout carries only float vectors, which is everything the
+/// neutral desc's callers use. An unmapped format is refused rather than
+/// approximated -- a silently wrong stride reads as corrupt geometry.
+fn to_web_vertex_format(format: rhi.Format) !rhi.pipeline.VertexFormat {
+    return switch (format) {
+        .r32_sfloat => .float,
+        .rg32_sfloat => .float2,
+        .rgb32_sfloat => .float3,
+        .rgba32_sfloat => .float4,
+        else => error.Unsupported,
+    };
 }
 
 fn free_shader_bins(self: *Program) void {
@@ -235,6 +403,11 @@ pub fn deinit(self: *Program, device: *rhi.Device) void {
         while (it.next()) |slot| {
             if (slot.mtl.render) |r| r.release();
         }
+    } else if (comptime rhi.platform_has_api(.wgpu)) {
+        var it = self.pipeline.valueIterator();
+        while (it.next()) |slot| slot.web.handle.deinit(device);
+        self.allocator.free(self.backend.web.texture_bindings);
+        self.backend.web.shader.deinit(device);
     }
     self.pipeline.deinit(self.allocator);
     self.binding_reflection.deinit(self.allocator);
@@ -268,6 +441,12 @@ pub fn bindPipeline(
     }
     if (rhi.is_target_selected(.mtl)) {
         try self.bindPipelineMtl(device, cmd, pipeline_hash, debug_name, desc);
+        return;
+    }
+    if (comptime rhi.platform_has_api(.wgpu)) {
+        // `debug_name` has nowhere to go: neither web backend exposes object
+        // labels through the glue.
+        try self.bindPipelineWeb(device, cmd, pipeline_hash, desc);
         return;
     }
     return error.UnsupportedBackend;
@@ -318,6 +497,19 @@ pub fn pushConstants(
         const enc = cmd.backend.mtl.encoder.?;
         if (self.push_constant_stages.vertex) enc.setVertexBytes(data.ptr, data.len, 0);
         if (self.push_constant_stages.fragment) enc.setFragmentBytes(data.ptr, data.len, 0);
+        return;
+    }
+    if (comptime rhi.platform_has_api(.wgpu)) {
+        // WebGPU has no push constants; the core layer emulates them with a
+        // pipeline-owned uniform buffer, which is why this needs the pipeline
+        // rather than a standalone layout. A partial update has no meaning
+        // against a whole-buffer write, so a non-zero offset is a caller error.
+        std.debug.assert(offset == 0);
+        const pipeline = self.backend.web.bound orelse {
+            std.debug.assert(false); // pushConstants before bindPipeline
+            return;
+        };
+        cmd.set_push_constants(device, pipeline, data);
         return;
     }
 }
@@ -387,7 +579,7 @@ fn mtl_load_function(
     dev: rhi.metal.mtl.Device,
     stage: ProgramStage,
 ) !?rhi.metal.mtl.Function {
-    const bin = self.shader_bin[@intFromEnum(stage)];
+    const bin = self.shader_bin[@backingInt(stage)];
     if (bin.buf.len == 0) return null;
     const src = rhi.metal.ns.String.fromUtf8Slice(bin.buf);
     var err: ?rhi.metal.ns.Error = null;
@@ -616,7 +808,7 @@ fn bindPipelineVk(
             .{ .s = .fragment, .bit = .{ .fragment = true } },
         };
         for (stage_table) |st| {
-            const bin = self.shader_bin[@intFromEnum(st.s)];
+            const bin = self.shader_bin[@backingInt(st.s)];
             if (bin.buf.len == 0) continue;
             std.debug.assert(bin.buf.len % @sizeOf(u32) == 0);
             var mod_info: rhi.vulkan.vk.ShaderModuleCreateInfo = .{
@@ -669,7 +861,7 @@ fn bindComputePipelineVk(
     const gop = try self.pipeline.getOrPut(self.allocator, pipeline_hash);
     if (!gop.found_existing) {
         errdefer _ = self.pipeline.remove(pipeline_hash);
-        const bin = self.shader_bin[@intFromEnum(ProgramStage.compute)];
+        const bin = self.shader_bin[@backingInt(ProgramStage.compute)];
         std.debug.assert(bin.buf.len > 0);
         std.debug.assert(bin.buf.len % @sizeOf(u32) == 0);
         var mod_info: rhi.vulkan.vk.ShaderModuleCreateInfo = .{
@@ -712,6 +904,15 @@ pub fn bindDescriptors(
 ) !void {
     if (rhi.is_target_selected(.vk)) {
         try self.bindDescriptorsVk(device, cmd, frame_index, bindings, bind_point);
+        return;
+    }
+    if (comptime rhi.platform_has_api(.wgpu)) {
+        // `frame_index` is unused here: it exists to pick a per-frame descriptor
+        // set, and the web has none -- a WebGPU bind group is memoised by the
+        // core layer against the resources that went into it.
+        if (bind_point != .graphics) return error.Unsupported;
+        const pipeline = self.backend.web.bound orelse return error.Unsupported;
+        try cmd.web_bind_descriptors(device, pipeline, bindings);
         return;
     }
     // Metal: argument buffers + a compute encoder + useResource plumbing are not

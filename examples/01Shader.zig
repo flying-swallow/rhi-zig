@@ -190,7 +190,10 @@ fn app_init(app_context: *platform.AppContext(Context), window: *platform.Window
             .fragment_stage = .{ .data = fs, .entry_point = "fragmentMain" },
         });
     };
-    const pipeline = try rhi.Pipeline.init_graphics(&cntx.device, .{ .shader = &shader, .swapchain = &swapchain });
+    const pipeline = try rhi.Pipeline.init_graphics(&cntx.device, .{
+        .shader = &shader,
+        .colors = &.{.{ .format = swapchain.color_format() }},
+    });
 
     cntx.swapchain = try SwapchainRef.create(app_context.gpa, &cntx.device, swapchain);
     cntx.timekeeper = .{ .tocks_per_s = platform.perf_frequency() };

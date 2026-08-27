@@ -112,20 +112,25 @@ pub fn deinit(self: *Pipeline, device: *rhi.Device) void {
     }
 }
 
+/// The most color targets a pipeline can declare. Matches the fixed
+/// `RenderingAttachmentInfo` array `Cmd.begin_rendering` fills and
+/// `rpi.pipeline_desc.MAX_COLOR_ATTACHMENTS`.
+pub const max_color_attachments = 8;
+
 pub const VertexFormat = enum { float, float2, float3, float4 };
 pub const VertexAttribute = struct { location: u32, format: VertexFormat, offset: u32 };
 pub const VertexLayout = struct { stride: u32, attributes: []const VertexAttribute };
 
-/// Blend state for `init_graphics`'s single color target.
+/// Blend state for one of `init_graphics`'s color targets.
 ///
-/// `null` on the options struct means blending is off, which is what every
-/// caller predating this got. The defaults here are straight (non-premultiplied)
-/// alpha, because that is what a sprite or glyph atlas with an alpha channel
-/// wants and it is the only reason to reach for this at all.
+/// `null` on a `ColorTarget` means blending is off for that target. The
+/// defaults here are straight (non-premultiplied) alpha, because that is what a
+/// sprite or glyph atlas with an alpha channel wants and it is the only reason
+/// to reach for this at all.
 ///
-/// The full `ColorAttachmentDesc` below expresses the same thing per attachment
-/// for the descriptor-based path; this is the one-target subset `init_graphics`
-/// can actually deliver on all four backends.
+/// The full `ColorAttachmentDesc` below expresses the same thing for the
+/// descriptor-based path; this is the subset `init_graphics` can actually
+/// deliver on all four backends.
 pub const BlendState = struct {
     src_color: BlendFactor = .src_alpha,
     dst_color: BlendFactor = .one_minus_src_alpha,
@@ -195,19 +200,48 @@ pub const TextureSlot = struct {
 /// vertex streams are bound starting at index 1.
 pub const mtl_vertex_buffer_base: u32 = 1;
 
+/// One color render target: the format the pipeline renders it at, plus the
+/// blend state for that target. `blend = null` writes the source through
+/// untouched.
+///
+/// A pipeline's targets must match the attachments of the pass it runs in --
+/// `Cmd.begin_rendering`'s `color_attachments`, in the same order.
+pub const ColorTarget = struct {
+    format: rhi.Format,
+    blend: ?BlendState = null,
+};
+
+/// The depth/stencil target, and the test run against it. Present means both
+/// "the pass has a depth attachment" and "depth testing is on"; a pass that
+/// has a depth attachment it does not test against does not arise here.
+///
+/// `format` also decides whether the pipeline declares a stencil attachment:
+/// a combined format such as `d32_sfloat_s8_uint_x24` declares both.
+pub const DepthState = struct {
+    format: rhi.Format = .d32_sfloat,
+    write: bool = true,
+    compare: CompareOp = .less,
+};
+
 /// Minimal backend-agnostic graphics pipeline for the examples: a vertex +
-/// fragment shader rendering to the swapchain's color format, triangle list,
-/// dynamic viewport/scissor, with an optional vertex layout and vertex-stage
-/// push constants.
+/// fragment shader, triangle list, dynamic viewport/scissor, with an optional
+/// vertex layout and vertex-stage push constants.
+///
+/// The output merger is described by format alone -- there is no swapchain
+/// here. Render to one by passing `swapchain.color_format()`; render through
+/// dynamic rendering (the `rpi` layer) by passing the format you begin the
+/// pass with.
 pub fn init_graphics(device: *rhi.Device, options: struct {
     shader: *rhi.Shader,
-    swapchain: *rhi.Swapchain,
+    /// The color targets, in attachment order. Vulkan and Metal take up to
+    /// `max_color_attachments`; the web backends take one (see the
+    /// `MultipleRenderTargetsUnsupported` guards below).
+    colors: []const ColorTarget = &.{},
+    /// The depth/stencil target. `null` means the pipeline declares none and
+    /// does no depth testing.
+    depth: ?DepthState = null,
     vertex_layout: ?VertexLayout = null,
     push_constant_size: u32 = 0,
-    /// Enable depth testing/writing against a D32_SFLOAT depth attachment.
-    depth_test: bool = false,
-    /// Alpha blending for the single color target. `null` disables it.
-    blend: ?BlendState = null,
     /// Textures the fragment stage reads. `Cmd.web_bind_descriptors` addresses
     /// an entry by the names declared here; an entry's index is the WebGL2
     /// texture unit.
@@ -225,28 +259,34 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
             .{ .stage = .{ .vertex = true }, .module = vk_shader.vertex_module, .p_name = "main" },
             .{ .stage = .{ .fragment = true }, .module = vk_shader.pixel_module, .p_name = "main" },
         };
-        const blend = options.blend orelse BlendState{
-            // Blending off: pass the source through untouched.
-            .src_color = .one,
-            .dst_color = .zero,
-            .src_alpha = .one,
-            .dst_alpha = .zero,
-        };
-        var color_blend_attachment = [_]rhi.vulkan.vk.PipelineColorBlendAttachmentState{.{
-            .blend_enable = if (options.blend != null) .true else .false,
-            .src_color_blend_factor = blend.src_color.to_vk(),
-            .dst_color_blend_factor = blend.dst_color.to_vk(),
-            .color_blend_op = blend.color_op.to_vk(),
-            .src_alpha_blend_factor = blend.src_alpha.to_vk(),
-            .dst_alpha_blend_factor = blend.dst_alpha.to_vk(),
-            .alpha_blend_op = blend.alpha_op.to_vk(),
-            .color_write_mask = .{
-                .r = blend.write_mask.r == 1,
-                .g = blend.write_mask.g == 1,
-                .b = blend.write_mask.b == 1,
-                .a = blend.write_mask.a == 1,
-            },
-        }};
+        std.debug.assert(options.colors.len <= max_color_attachments);
+        var color_blend_attachment: [max_color_attachments]rhi.vulkan.vk.PipelineColorBlendAttachmentState = undefined;
+        var color_formats: [max_color_attachments]rhi.vulkan.vk.Format = undefined;
+        for (options.colors, 0..) |target, i| {
+            const blend = target.blend orelse BlendState{
+                // Blending off: pass the source through untouched.
+                .src_color = .one,
+                .dst_color = .zero,
+                .src_alpha = .one,
+                .dst_alpha = .zero,
+            };
+            color_formats[i] = rhi.vulkan.to_vk_format(target.format);
+            color_blend_attachment[i] = .{
+                .blend_enable = if (target.blend != null) .true else .false,
+                .src_color_blend_factor = blend.src_color.to_vk(),
+                .dst_color_blend_factor = blend.dst_color.to_vk(),
+                .color_blend_op = blend.color_op.to_vk(),
+                .src_alpha_blend_factor = blend.src_alpha.to_vk(),
+                .dst_alpha_blend_factor = blend.dst_alpha.to_vk(),
+                .alpha_blend_op = blend.alpha_op.to_vk(),
+                .color_write_mask = .{
+                    .r = blend.write_mask.r == 1,
+                    .g = blend.write_mask.g == 1,
+                    .b = blend.write_mask.b == 1,
+                    .a = blend.write_mask.a == 1,
+                },
+            };
+        }
         var dynamic_states = [_]rhi.vulkan.vk.DynamicState{ .viewport, .scissor };
         var dynamic_state: rhi.vulkan.vk.PipelineDynamicStateCreateInfo = .{
             .dynamic_state_count = dynamic_states.len,
@@ -256,7 +296,7 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
             .logic_op_enable = .false,
             .logic_op = .clear,
             .blend_constants = .{ 0, 0, 0, 0 },
-            .attachment_count = color_blend_attachment.len,
+            .attachment_count = @intCast(options.colors.len),
             .p_attachments = &color_blend_attachment,
         };
         var viewport_state: rhi.vulkan.vk.PipelineViewportStateCreateInfo = .{ .viewport_count = 1, .scissor_count = 1 };
@@ -310,9 +350,9 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
         errdefer dkb.destroyPipelineLayout(device.backend.vk.device, layout, null);
 
         var depth_stencil_state: rhi.vulkan.vk.PipelineDepthStencilStateCreateInfo = .{
-            .depth_test_enable = if (options.depth_test) .true else .false,
-            .depth_write_enable = if (options.depth_test) .true else .false,
-            .depth_compare_op = .less,
+            .depth_test_enable = if (options.depth != null) .true else .false,
+            .depth_write_enable = if (options.depth) |d| (if (d.write) .true else .false) else .false,
+            .depth_compare_op = if (options.depth) |d| d.compare.to_vk() else .less,
             .depth_bounds_test_enable = .false,
             .stencil_test_enable = .false,
             .min_depth_bounds = 0,
@@ -335,13 +375,17 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
             .p_dynamic_state = &dynamic_state,
             .p_depth_stencil_state = &depth_stencil_state,
         }};
-        var color_formats = [_]rhi.vulkan.vk.Format{options.swapchain.backend.vk.format};
         var rendering_info: rhi.vulkan.vk.PipelineRenderingCreateInfo = .{
-            .color_attachment_count = color_formats.len,
+            .color_attachment_count = @intCast(options.colors.len),
             .p_color_attachment_formats = &color_formats,
             .view_mask = 0,
-            .depth_attachment_format = if (options.depth_test) .d32_sfloat else .undefined,
-            .stencil_attachment_format = .undefined,
+            .depth_attachment_format = if (options.depth) |d| rhi.vulkan.to_vk_format(d.format) else .undefined,
+            // A combined depth/stencil format declares both attachments; the
+            // two take the same format, which is what Vulkan requires.
+            .stencil_attachment_format = if (options.depth) |d|
+                (if (rhi.format.GetProps(d.format).is_stencil) rhi.vulkan.to_vk_format(d.format) else .undefined)
+            else
+                .undefined,
         };
         rhi.vulkan.add_next(&create_info[0], &rendering_info);
         var pipeline: [1]rhi.vulkan.vk.Pipeline = .{.null_handle};
@@ -355,15 +399,24 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
         // Report that rather than dropping the caller's blend state on the
         // floor, which is how the rest of this backend treats what it cannot
         // express (see `to_gl_format`'s `error.UnsupportedFormat`).
-        if (options.blend != null) return error.BlendUnsupportedOnMetal;
+        for (options.colors) |target| {
+            if (target.blend != null) return error.BlendUnsupportedOnMetal;
+        }
+        std.debug.assert(options.colors.len <= max_color_attachments);
         const dev = device.backend.mtl.device;
         const desc = rhi.metal.mtl.RenderPipelineDescriptor.init();
         defer desc.release();
         desc.setVertexFunction(options.shader.backend.mtl.vertex_function.?);
         desc.setFragmentFunction(options.shader.backend.mtl.fragment_function.?);
-        desc.colorAttachments().object(0).setPixelFormat(options.swapchain.backend.mtl.pixel_format);
-        if (options.depth_test) {
-            desc.setDepthAttachmentPixelFormat(.depth32float);
+        for (options.colors, 0..) |target, i| {
+            desc.colorAttachments().object(@intCast(i)).setPixelFormat(rhi.metal.to_mtl_pixel_format(target.format));
+        }
+        if (options.depth) |d| {
+            const pixel_format = rhi.metal.to_mtl_pixel_format(d.format);
+            desc.setDepthAttachmentPixelFormat(pixel_format);
+            // A combined format is attached to both points; Metal takes the
+            // same pixel format for each.
+            if (rhi.format.GetProps(d.format).is_stencil) desc.setStencilAttachmentPixelFormat(pixel_format);
         }
         if (options.vertex_layout) |layout_desc| {
             const vd = rhi.metal.mtl.VertexDescriptor.vertexDescriptor();
@@ -385,11 +438,11 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
             return error.PipelineCreationFailed;
         };
         var depth_stencil_state: ?rhi.metal.mtl.DepthStencilState = null;
-        if (options.depth_test) {
+        if (options.depth) |d| {
             const dss_desc = rhi.metal.mtl.DepthStencilDescriptor.init();
             defer dss_desc.release();
-            dss_desc.setDepthCompareFunction(.less);
-            dss_desc.setDepthWriteEnabled(true);
+            dss_desc.setDepthCompareFunction(d.compare.to_mtl());
+            dss_desc.setDepthWriteEnabled(d.write);
             depth_stencil_state = dev.newDepthStencilState(dss_desc);
         }
         return .{ .backend = .{ .mtl = .{ .state = state, .depth_stencil_state = depth_stencil_state } } };
@@ -397,6 +450,12 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
     if (rhi.is_target_selected(.webgl)) {
         const webgl = rhi.webgl;
         const sh = &options.shader.backend.webgl;
+
+        // `FboCache.Key` carries one color slot and `Cmd.begin_rendering`
+        // asserts one attachment, so a second target could never be rendered
+        // to. The color *format* is unused here either way: GL bakes no render
+        // target format into a program.
+        if (options.colors.len > 1) return error.MultipleRenderTargetsUnsupported;
 
         var err_buf: [1024]u8 = undefined;
         @memset(&err_buf, 0);
@@ -415,24 +474,28 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
         }
         errdefer webgl.gl_delete_program(program);
 
-        var result: Pipeline = .{ .backend = .{ .webgl = .{
-            .cookie = rhi.next_cookie(),
-            .program = program,
-            .topology = webgl.gl.TRIANGLES,
-            .index_type = webgl.gl.UNSIGNED_SHORT,
-            .depth_test = options.depth_test,
-            .depth_write = options.depth_test,
-            .depth_compare = webgl.gl.LESS,
-            // Matches the Vulkan arm, which disables culling and winds
-            // clockwise. SPIRV-Cross flips Y in the shader, which reverses the
-            // apparent winding, so `.ccw` here corresponds to the other
-            // backends' `.cw`.
-            .cull_enabled = false,
-            .cull_mode = webgl.gl.BACK,
-            .front_face = webgl.gl.CCW,
-        } } };
+        var result: Pipeline = .{
+            .backend = .{
+                .webgl = .{
+                    .cookie = rhi.next_cookie(),
+                    .program = program,
+                    .topology = webgl.gl.TRIANGLES,
+                    .index_type = webgl.gl.UNSIGNED_SHORT,
+                    .depth_test = options.depth != null,
+                    .depth_write = if (options.depth) |d| d.write else false,
+                    .depth_compare = if (options.depth) |d| webgl.enums.to_gl_compare(d.compare) else webgl.gl.LESS,
+                    // Matches the Vulkan arm, which disables culling and winds
+                    // clockwise. SPIRV-Cross flips Y in the shader, which reverses the
+                    // apparent winding, so `.ccw` here corresponds to the other
+                    // backends' `.cw`.
+                    .cull_enabled = false,
+                    .cull_mode = webgl.gl.BACK,
+                    .front_face = webgl.gl.CCW,
+                },
+            },
+        };
 
-        if (options.blend) |blend| {
+        if (if (options.colors.len > 0) options.colors[0].blend else null) |blend| {
             const w = &result.backend.webgl;
             w.blend_enabled = true;
             w.blend_src_color = webgl.enums.to_gl_blend_factor(blend.src_color);
@@ -483,6 +546,12 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
         const wgpu = rhi.webgpu;
         const sh = &options.shader.backend.wgpu;
 
+        // `wgpu_device_create_render_pipeline` takes a scalar color format and
+        // the glue builds a one-element `targets` array, matching
+        // `Cmd.begin_rendering`'s one-attachment assert. A second target would
+        // be silently dropped, so say so instead.
+        if (options.colors.len > 1) return error.MultipleRenderTargetsUnsupported;
+
         // Vertex attributes cross the wasm boundary as a flat array of
         // (location, format, offset) triples rather than a struct, so there is
         // no field layout for the JS side to drift out of sync with.
@@ -494,19 +563,24 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
             stride = layout_desc.stride;
             for (layout_desc.attributes, 0..) |attr, i| {
                 attrs[i * 3 + 0] = attr.location;
-                attrs[i * 3 + 1] = @intFromEnum(wgpu.to_wgpu_vertex_format(attr.format));
+                attrs[i * 3 + 1] = @backingInt(wgpu.to_wgpu_vertex_format(attr.format));
                 attrs[i * 3 + 2] = attr.offset;
             }
             attr_count = @intCast(layout_desc.attributes.len * 3);
         }
 
-        // `depth_test` is documented as targeting D32_SFLOAT, matching the other
-        // backends; `.undefined_format` means the pass has no depth attachment.
-        const depth_format: wgpu.TextureFormat = if (options.depth_test) .depth32float else .undefined_format;
+        // `.undefined_format` means the pass has no depth attachment. WebGPU has
+        // no stencil-only attachment point of its own: a combined format carries
+        // both, which is what `depthStencilAttachment` takes.
+        const depth_format: wgpu.TextureFormat = if (options.depth) |d|
+            try wgpu.to_wgpu_texture_format(d.format)
+        else
+            .undefined_format;
 
         // Blending off still needs factors to pass across the boundary; the
         // `blend_enable` flag is what decides whether JS attaches them.
-        const blend = options.blend orelse BlendState{};
+        const target_blend: ?BlendState = if (options.colors.len > 0) options.colors[0].blend else null;
+        const blend = target_blend orelse BlendState{};
         const wgpu_write_mask: u32 =
             (@as(u32, blend.write_mask.r) << 0) |
             (@as(u32, blend.write_mask.g) << 1) |
@@ -521,19 +595,22 @@ pub fn init_graphics(device: *rhi.Device, options: struct {
             sh.fragment_module,
             sh.fragment_entry.ptr,
             @intCast(sh.fragment_entry.len),
-            options.swapchain.backend.wgpu.format,
+            color_target_format: {
+                if (options.colors.len == 0) break :color_target_format .undefined_format;
+                break :color_target_format try wgpu.to_wgpu_texture_format(options.colors[0].format);
+            },
             depth_format,
             .triangle_list,
             .none,
             // The Vulkan arm rasterizes with `front_face = .clockwise` and no
             // culling; match it so the same mesh winds the same way.
             .cw,
-            @intFromBool(options.depth_test),
-            .less,
+            @intFromBool(if (options.depth) |d| d.write else false),
+            if (options.depth) |d| wgpu.to_wgpu_compare(d.compare) else .less,
             stride,
             &attrs,
             attr_count,
-            @intFromBool(options.blend != null),
+            @intFromBool(target_blend != null),
             wgpu.to_wgpu_blend_factor(blend.src_color),
             wgpu.to_wgpu_blend_factor(blend.dst_color),
             wgpu.to_wgpu_blend_op(blend.color_op),
@@ -878,6 +955,44 @@ pub const BlendOp = enum(u3) {
             .reverse_subtract => .reverse_subtract,
             .min => .min,
             .max => .max,
+        };
+    }
+};
+
+// https://registry.khronos.org/vulkan/specs/latest/man/html/VkCompareOp.html
+pub const CompareOp = enum(u8) {
+    never,
+    less,
+    equal,
+    less_equal,
+    greater,
+    not_equal,
+    greater_equal,
+    always,
+
+    pub fn to_vk(self: CompareOp) rhi.vulkan.vk.CompareOp {
+        return switch (self) {
+            .never => .never,
+            .less => .less,
+            .equal => .equal,
+            .less_equal => .less_or_equal,
+            .greater => .greater,
+            .not_equal => .not_equal,
+            .greater_equal => .greater_or_equal,
+            .always => .always,
+        };
+    }
+
+    pub fn to_mtl(self: CompareOp) rhi.metal.types.CompareFunction {
+        return switch (self) {
+            .never => .never,
+            .less => .less,
+            .equal => .equal,
+            .less_equal => .less_equal,
+            .greater => .greater,
+            .not_equal => .not_equal,
+            .greater_equal => .greater_equal,
+            .always => .always,
         };
     }
 };

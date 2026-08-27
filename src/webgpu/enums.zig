@@ -205,6 +205,19 @@ pub fn to_wgpu_blend_op(op: rhi.pipeline.BlendOp) BlendOperation {
     };
 }
 
+pub fn to_wgpu_compare(op: rhi.pipeline.CompareOp) CompareFunction {
+    return switch (op) {
+        .never => .never,
+        .less => .less,
+        .equal => .equal,
+        .less_equal => .less_equal,
+        .greater => .greater,
+        .not_equal => .not_equal,
+        .greater_equal => .greater_equal,
+        .always => .always,
+    };
+}
+
 pub const FilterMode = enum(u32) { nearest, linear };
 pub const AddressMode = enum(u32) { clamp_to_edge, repeat, mirror_repeat };
 

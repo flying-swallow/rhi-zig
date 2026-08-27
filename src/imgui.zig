@@ -143,7 +143,7 @@ pub const ImguiLayer = struct {
             .index_buffer = index_buffer,
             .vertex_alloc = rhi.SegmentAlloc.init(.{ .max_elements = init_vertex_capacity, .element_stride = @sizeOf(c.ImDrawVert), .num_segments = frames_in_flight }),
             .index_alloc = rhi.SegmentAlloc.init(.{ .max_elements = init_index_capacity, .element_stride = @sizeOf(c.ImDrawIdx), .num_segments = frames_in_flight }),
-            .color_format = swapchain_color_format(swapchain),
+            .color_format = swapchain.color_format(),
         };
     }
 
@@ -333,21 +333,6 @@ pub const ImguiLayer = struct {
 };
 
 // ---- Vulkan-only init helpers (only referenced under a comptime .vk gate) ---
-
-/// Map the swapchain's chosen color format back to a core `rhi.Format` so the
-/// ImGui pipeline's color attachment matches it for dynamic rendering.
-fn swapchain_color_format(sc: *rhi.Swapchain) rhi.Format {
-    if (comptime rhi.platform_has_api(.vk)) {
-        return switch (sc.backend.vk.format) {
-            .r8g8b8a8_unorm => .rgba8_unorm,
-            .b8g8r8a8_unorm => .bgra8_unorm,
-            .r16g16b16a16_sfloat => .rgba16_sfloat,
-            .a2b10g10r10_unorm_pack32 => .r10_g10_b10_a2_unorm,
-            else => .rgba8_unorm,
-        };
-    }
-    return .rgba8_unorm;
-}
 
 /// Create a linear, clamp-to-edge sampler wrapped in an `rhi.Sampler`. Built
 /// inline because `Sampler.init` is not yet finished; swap once it lands.

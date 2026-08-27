@@ -115,6 +115,10 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
             mtl: if (rhi.platform_has_api(.mtl)) struct {
                 layer: rhi.metal.ca.MetalLayer,
                 pixel_format: rhi.metal.types.PixelFormat,
+                /// The same format as `pixel_format`, in core terms. Carried
+                /// rather than derived: there is no reverse mapping off
+                /// `MTLPixelFormat`.
+                format: rhi.Format = .bgra8_unorm,
                 current_drawable: ?rhi.metal.ca.MetalDrawable = null,
             } else void,
             // WebGPU has no swapchain object: a configured canvas context hands
@@ -320,6 +324,28 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                 self.backend.wgpu.current_texture = .none;
                 self.backend.wgpu.surface = .none;
                 return;
+            }
+            unreachable;
+        }
+
+        /// The backend-agnostic format of the images this swapchain hands out.
+        ///
+        /// Not named `format`: Zig reserves that decl name for the `std.fmt`
+        /// custom formatter. This is what a pipeline rendering to the swapchain
+        /// declares as its color target (`Pipeline.init_graphics`), and what an
+        /// `ImageView` over a swapchain image is created with.
+        pub fn color_format(self: *const Self) rhi.Format {
+            if ((comptime rhi.platform_has_api(.vk)) and rhi.renderer.instance.backend == .vk) {
+                return rhi.vulkan.from_vk_format(self.backend.vk.format);
+            }
+            if ((comptime rhi.platform_has_api(.mtl)) and rhi.renderer.instance.backend == .mtl) {
+                return self.backend.mtl.format;
+            }
+            if ((comptime rhi.platform_has_api(.wgpu)) and rhi.renderer.instance.backend == .wgpu) {
+                return rhi.webgpu.from_wgpu_texture_format(self.backend.wgpu.format);
+            }
+            if ((comptime rhi.platform_has_api(.webgl)) and rhi.renderer.instance.backend == .webgl) {
+                return self.backend.webgl.format;
             }
             unreachable;
         }
@@ -592,10 +618,11 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                     .window_handle => |handle| rhi.metal.ca.MetalLayer.fromId(@ptrCast(@alignCast(handle.metal.layer))) orelse return error.MetalNoLayer,
                     .old_swapchain => |o| o.backend.mtl.layer,
                 };
-                const pixel_format: rhi.metal.types.PixelFormat = switch (desc.format) {
-                    .bt709_g22_8bit => .bgra8unorm,
-                    else => .bgra8unorm,
+                const formats: struct { mtl: rhi.metal.types.PixelFormat, rhi: rhi.Format } = switch (desc.format) {
+                    .bt709_g22_8bit => .{ .mtl = .bgra8unorm, .rhi = .bgra8_unorm },
+                    else => .{ .mtl = .bgra8unorm, .rhi = .bgra8_unorm },
                 };
+                const pixel_format = formats.mtl;
                 layer.setDevice(device.backend.mtl.device);
                 layer.setPixelFormat(pixel_format);
                 layer.setDrawableSize(.{ .width = @floatFromInt(desc.width), .height = @floatFromInt(desc.height) });
@@ -608,6 +635,7 @@ pub fn Swapchain(comptime max_image_count: comptime_int) type {
                     .backend = .{ .mtl = .{
                         .layer = layer,
                         .pixel_format = pixel_format,
+                        .format = formats.rhi,
                         .current_drawable = null,
                     } },
                 };

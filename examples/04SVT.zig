@@ -198,16 +198,6 @@ fn procTile(page: Page, buf: []u8) void {
     }
 }
 
-fn swapchainRhiFormat(sc: *rhi.Swapchain) rhi.Format {
-    return switch (sc.backend.vk.image_format) {
-        .b8g8r8a8_unorm => .bgra8_unorm,
-        .r8g8b8a8_unorm => .rgba8_unorm,
-        .b8g8r8a8_srgb => .bgra8_srgb,
-        .r8g8b8a8_srgb => .rgba8_srgb,
-        else => .bgra8_unorm,
-    };
-}
-
 // ---------------------------------------------------------------------------
 // App state
 // ---------------------------------------------------------------------------
@@ -516,7 +506,7 @@ fn iterate_handler(app_context: *sdl_app.AppContext(Context)) anyerror!sdl_app.s
     });
     cmd.set_viewport(&cntx.device, .{ .width = @floatFromInt(w), .height = @floatFromInt(h) });
     cmd.set_scissor(&cntx.device, .{ .width = w, .height = h });
-    const color_atts = [_]rpi.pipeline_desc.ColorAttachment{.{ .format = swapchainRhiFormat(&cntx.swapchain.inner) }};
+    const color_atts = [_]rpi.pipeline_desc.ColorAttachment{.{ .format = cntx.swapchain.inner.color_format() }};
     try cntx.composite_program.bindPipeline(&cntx.device, cmd, 2, "svt_composite", .{
         .topology = .triangle_list,
         .cull_mode = .none,
